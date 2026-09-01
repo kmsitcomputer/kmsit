@@ -15,7 +15,7 @@ Repositori ini berisi implementasi **full-stack yang berjalan di runtime browser
 | Webhook payment gateway            | `PaymentService.handleWebhook()` — signature verification + idempotency log |
 | Blade views                        | React components (`src/pages/...`)                 |
 
-> Pada deployment Laravel production, tabel-tabel di `db.ts` berkorespondensi langsung dengan migration MySQL (`users, roles, courses, course_sections, lessons, enrollments, lesson_progress, quizzes, quiz_questions, quiz_attempts, certificates, certificate_templates, articles, news, tutorials, activities, pages, homepage_sections, menus, menu_items, media, orders, payments, payment_transactions, instructor_wallets, wallet_transactions, withdrawals, products, carts, notifications, settings, audit_logs` — lihat daftar konstanta `TABLES` di `src/pages/Installer.tsx`).
+> Pada deployment Laravel production, tabel-tabel di `db.ts` berkorespondensi 1:1 dengan **`database/schema.sql`** (40+ tabel: `users, roles, permissions, sessions, categories, courses, course_sections, lessons, enrollments, lesson_progress, quizzes, quiz_questions, quiz_options, quiz_attempts, certificates, certificate_templates, articles, news, tutorials, activities, pages, homepage_blocks, menus, menu_items, media, orders, order_items, payments, webhook_logs, instructor_wallet_transactions, withdrawals, products, product_variants, vouchers, cart_items, digital_deliveries, notifications, audit_logs, contact_messages, settings`) — foreign key, index, dan unique constraint anti-duplikasi sudah termasuk. Impor: `mysql -u root -p < database/schema.sql`.
 
 ## Fitur
 

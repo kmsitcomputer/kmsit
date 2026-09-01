@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import schemaSql from '../../../database/schema.sql?raw';
 import { db, type GatewayKey } from '../../lib/db';
 import { getSetting, setSettings, audit, exportBackup, fmtDateTime, maskKey, downloadFile } from '../../lib/services';
 import { GATEWAYS, saveGatewaySettings } from '../../lib/commerce';
@@ -267,7 +268,7 @@ export function SettingsSystem() {
           {models.map((m) => <option key={m} value={m}>{m}</option>)}
         </Select>
         <button className="btn-outline" onClick={() => { exportBackup(); toast('success', 'Backup diunduh (tanpa credential & hash password).'); }}><Icon name="download" size={15} /> Backup Database</button>
-        <button className="btn-outline" onClick={() => { downloadFile('kmsit_computer.sql', '-- KMSIT Computer schema export\n-- Struktur lengkap tersedia di database/migrations (Laravel) — lihat README.md\nSELECT "schema managed by migrations" AS info;\n', 'text/plain'); toast('success', 'File SQL diunduh.'); }}><Icon name="database" size={15} /> Skema SQL</button>
+        <button className="btn-outline" onClick={() => { downloadFile('kmsit_computer.sql', schemaSql, 'text/plain'); toast('success', 'Skema MySQL lengkap diunduh (40+ tabel + seed struktur).'); }}><Icon name="database" size={15} /> Skema SQL</button>
       </div>
       <DataTable rows={logs} pageSize={10} searchKeys={(l) => `${l.userName} ${l.action} ${l.model} ${l.detail}`}
         emptyTitle="Belum ada log" emptySub="Aktivitas akan tercatat otomatis."
