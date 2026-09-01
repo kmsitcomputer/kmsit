@@ -302,39 +302,50 @@ export interface NavGroup { label: string; items: NavItem[]; }
 
 export function dashboardNav(roleKey: string, perms: string[]): NavGroup[] {
   const has = (p: string) => perms.includes('*') || perms.includes(p);
+  const staff = roleKey === 'super_admin' || roleKey === 'admin';
   const all: NavGroup[] = [
     { label: '', items: [{ to: '/dashboard', label: 'Dashboard', icon: 'grid', end: true }] },
+    { label: 'Pembelajaran', items: [
+      { to: '/dashboard/my-learning', label: 'Pembelajaranku', icon: 'grad-cap', perm: 'learn' },
+      { to: '/dashboard/digital', label: 'Produk Digital', icon: 'download', perm: 'learn' },
+      { to: '/dashboard/certificates', label: 'Sertifikat Saya', icon: 'award', perm: 'student_certificates' },
+      { to: '/dashboard/orders', label: 'Order Saya', icon: 'receipt', perm: 'student_orders' },
+    ]},
+    { label: 'Akademik', items: [
+      { to: '/dashboard/courses', label: 'Kelas', icon: 'book', perm: roleKey === 'instructor' ? 'instructor_courses' : 'manage_courses' },
+      { to: '/dashboard/categories', label: 'Kategori', icon: 'tag', perm: 'manage_categories' },
+      { to: '/dashboard/quizzes', label: 'Quiz', icon: 'target', perm: roleKey === 'instructor' ? 'instructor_quizzes' : 'manage_quizzes' },
+      { to: '/dashboard/certificates', label: 'Sertifikat', icon: 'award', perm: roleKey === 'instructor' ? 'instructor_certificates' : 'manage_certificates' },
+      { to: '/dashboard/students', label: 'Student Kelas', icon: 'users', perm: roleKey === 'instructor' ? 'instructor_students' : undefined },
+    ]},
     { label: 'Konten', items: [
       { to: '/dashboard/articles', label: 'Artikel', icon: 'file-text', perm: 'manage_articles' },
       { to: '/dashboard/news', label: 'Berita', icon: 'news', perm: 'manage_news' },
       { to: '/dashboard/tutorials', label: 'Tutorial', icon: 'book-open', perm: 'manage_tutorials' },
       { to: '/dashboard/activities', label: 'Kegiatan', icon: 'calendar', perm: 'manage_activities' },
-      { to: '/dashboard/pages', label: 'Halaman', icon: 'file', perm: 'manage_pages' },
-      { to: '/dashboard/media', label: 'Media', icon: 'image', perm: 'manage_media' },
     ]},
-    { label: 'LMS', items: [
-      { to: '/dashboard/courses', label: 'Kelas', icon: 'book', perm: roleKey === 'instructor' ? 'instructor_courses' : 'manage_courses' },
-      { to: '/dashboard/categories', label: 'Kategori', icon: 'tag', perm: 'manage_categories' },
-      { to: '/dashboard/quizzes', label: 'Quiz', icon: 'target', perm: roleKey === 'instructor' ? 'instructor_quizzes' : 'manage_quizzes' },
-      { to: '/dashboard/certificates', label: 'Sertifikat', icon: 'award', perm: roleKey === 'instructor' ? 'instructor_certificates' : roleKey === 'student' ? 'student_certificates' : 'manage_certificates' },
+    { label: 'Toko & Order', items: [
+      { to: '/dashboard/products', label: 'Produk', icon: 'bag', perm: 'manage_shop' },
+      { to: '/dashboard/vouchers', label: 'Voucher', icon: 'tag', perm: 'manage_vouchers' },
+      { to: '/dashboard/orders', label: 'Orders', icon: 'receipt', perm: staff ? 'manage_orders' : 'instructor_wallet' },
+      { to: '/dashboard/payments', label: 'Pembayaran', icon: 'card', perm: 'view_payments' },
+    ]},
+    { label: 'Keuangan', items: [
+      { to: '/dashboard/wallet', label: 'Dompet', icon: 'wallet', perm: 'instructor_wallet' },
+      { to: '/dashboard/withdrawals', label: 'Withdrawal', icon: 'banknote', perm: roleKey === 'instructor' ? 'instructor_withdrawals' : 'process_withdrawals' },
     ]},
     { label: 'Pengguna', items: [
-      { to: '/dashboard/students', label: 'Students', icon: 'users', perm: roleKey === 'instructor' ? 'instructor_students' : 'manage_students' },
+      { to: '/dashboard/students', label: 'Students', icon: 'users', perm: 'manage_students' },
       { to: '/dashboard/instructors', label: 'Instructors', icon: 'grad-cap', perm: 'manage_instructors' },
       { to: '/dashboard/users', label: 'Semua User', icon: 'shield', perm: '*' },
       { to: '/dashboard/messages', label: 'Pesan Masuk', icon: 'chat', perm: 'view_messages' },
     ]},
-    { label: 'Komersial', items: [
-      { to: '/dashboard/orders', label: 'Orders', icon: 'receipt', perm: roleKey === 'student' ? 'student_orders' : roleKey === 'instructor' ? 'instructor_wallet' : 'manage_orders' },
-      { to: '/dashboard/payments', label: 'Pembayaran', icon: 'card', perm: 'view_payments' },
-      { to: '/dashboard/wallet', label: 'Dompet', icon: 'wallet', perm: 'instructor_wallet' },
-      { to: '/dashboard/withdrawals', label: 'Withdrawal', icon: 'banknote', perm: roleKey === 'instructor' ? 'instructor_withdrawals' : 'process_withdrawals' },
-      { to: '/dashboard/products', label: 'Produk', icon: 'bag', perm: 'manage_shop' },
-    ]},
     { label: 'Website', items: [
       { to: '/dashboard/homepage', label: 'Homepage', icon: 'layout', perm: 'manage_homepage' },
       { to: '/dashboard/menus', label: 'Menu', icon: 'list', perm: 'manage_menus' },
+      { to: '/dashboard/pages', label: 'Halaman', icon: 'file', perm: 'manage_pages' },
       { to: '/dashboard/about', label: 'Tentang Kami', icon: 'info', perm: 'manage_about' },
+      { to: '/dashboard/media', label: 'Media', icon: 'image', perm: 'manage_media' },
     ]},
     { label: 'Pengaturan', items: [
       { to: '/dashboard/settings', label: 'Umum', icon: 'gear', perm: '*' },
@@ -343,7 +354,6 @@ export function dashboardNav(roleKey: string, perms: string[]): NavGroup[] {
       { to: '/dashboard/settings-system', label: 'Sistem & Audit', icon: 'server', perm: '*' },
     ]},
     { label: 'Akun', items: [
-      { to: '/dashboard/my-learning', label: 'Pembelajaranku', icon: 'grad-cap', perm: 'learn' },
       { to: '/dashboard/profile', label: 'Profil Saya', icon: 'user' },
     ]},
   ];

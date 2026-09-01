@@ -16,7 +16,8 @@ import CoursesAdmin from './pages/dash/Courses';
 import QuizzesAdmin from './pages/dash/Quizzes';
 import { ContentModule, MODULES, CategoriesPage, MediaPage, CertificateTemplatesPage, CertificatesAdmin } from './pages/dash/Crud';
 import { PeoplePage, MessagesPage } from './pages/dash/People';
-import { OrdersPage, PaymentsPage, WalletPage, WithdrawalsPage } from './pages/dash/Commerce';
+import { OrdersPage, PaymentsPage, WalletPage, WithdrawalsPage, MyDigitalPage } from './pages/dash/Commerce';
+import VouchersPage from './pages/dash/Vouchers';
 import { HomepageBuilder, MenusPage, AboutEditor } from './pages/dash/Cms';
 import { SettingsGeneral, SettingsPayments, SettingsLanguage, SettingsSystem } from './pages/dash/Settings';
 import { DashShell } from './components/Shell';
@@ -142,6 +143,8 @@ export default function App() {
             <Route path="/dashboard/wallet" element={<RequireAuth><Guard anyOf={['instructor_wallet']}><WalletPage /></Guard></RequireAuth>} />
             <Route path="/dashboard/withdrawals" element={<RequireAuth><Guard anyOf={['process_withdrawals', 'instructor_withdrawals']}><WithdrawalsPage /></Guard></RequireAuth>} />
             <Route path="/dashboard/products" element={<RequireAuth><Guard anyOf={['manage_shop']}><ContentModule def={MODULES.products} /></Guard></RequireAuth>} />
+            <Route path="/dashboard/vouchers" element={<RequireAuth><Guard anyOf={['manage_vouchers']}><VouchersPage /></Guard></RequireAuth>} />
+            <Route path="/dashboard/digital" element={<RequireAuth><MyDigitalPage /></RequireAuth>} />
 
             <Route path="/dashboard/homepage" element={<RequireAuth><Guard anyOf={['manage_homepage']}><HomepageBuilder /></Guard></RequireAuth>} />
             <Route path="/dashboard/menus" element={<RequireAuth><Guard anyOf={['manage_menus']}><MenusPage /></Guard></RequireAuth>} />

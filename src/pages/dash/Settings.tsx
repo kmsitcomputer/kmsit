@@ -24,7 +24,7 @@ export function SettingsGeneral() {
   const { user, toast } = useApp();
   const s = db.settings();
   const [f, setF] = useState({ ...s });
-  const [logoPick, setLogoPick] = useState(false);
+  const [logoPick, setLogoPick] = useState<'logo' | 'favicon' | null>(null);
   if (!user) return null;
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const save = () => {
@@ -47,8 +47,25 @@ export function SettingsGeneral() {
                 <Field label="Logo">
                   <div className="flex items-center gap-3">
                     {f.logo ? <img src={f.logo} alt="logo" className="h-12 w-12 rounded-xl object-cover border border-base-200 dark:border-base-700" /> : <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-base-100 dark:bg-base-850 text-base-400"><Icon name="image" size={18} /></span>}
-                    <button className="btn-outline btn-sm" onClick={() => setLogoPick(true)}>Pilih Logo</button>
+                    <button className="btn-outline btn-sm" onClick={() => setLogoPick('logo')}>Pilih Logo</button>
                     {f.logo && <button className="btn-ghost btn-sm" onClick={() => set('logo', '')}>Hapus</button>}
+                  </div>
+                </Field>
+              </div>
+              <div className="sm:col-span-2">
+                <Field label="Favicon" hint="Ikon tab browser — langsung aktif setelah disimpan (PNG/SVG, disarankan persegi).">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-12 w-12 items-center justify-center rounded-xl border border-base-200 dark:border-base-700 bg-base-100 dark:bg-base-850 overflow-hidden">
+                      {f.favicon ? <img src={f.favicon} alt="favicon" className="h-8 w-8 object-contain" /> : <Icon name="globe" size={18} className="text-base-400" />}
+                    </span>
+                    <button className="btn-outline btn-sm" onClick={() => setLogoPick('favicon')}><Icon name="upload" size={12} /> Unggah / Ganti Favicon</button>
+                    {f.favicon && <button className="btn-ghost btn-sm" onClick={() => set('favicon', '')}>Reset</button>}
+                    {f.favicon && (
+                      <span className="hidden sm:flex items-center gap-1.5 rounded-lg bg-base-100 dark:bg-base-850 border border-base-200 dark:border-base-700 px-2.5 py-1.5">
+                        <img src={f.favicon} alt="" className="h-4 w-4 object-contain" />
+                        <span className="font-mono text-[10px] text-base-400">pratinjau tab</span>
+                      </span>
+                    )}
                   </div>
                 </Field>
               </div>
@@ -94,7 +111,7 @@ export function SettingsGeneral() {
           </Section>
         </div>
       </div>
-      <MediaPicker open={logoPick} onClose={() => setLogoPick(false)} onPick={(url) => { set('logo', url); setLogoPick(false); }} />
+      <MediaPicker open={!!logoPick} onClose={() => setLogoPick(null)} onPick={(url) => { if (logoPick) set(logoPick, url); setLogoPick(null); }} />
     </DashShell>
   );
 }

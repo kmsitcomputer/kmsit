@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { db, type Article, type NewsItem, type Tutorial, type Activity, type Course, type HomeBlock, type ID } from '../../lib/db';
+import { db, type Article, type NewsItem, type Tutorial, type Activity, type Course, type HomeBlock, type Product, type ID } from '../../lib/db';
 import { fmtMoney, fmtDate, getSetting, sendContactMessage, timeAgo, youtubeId } from '../../lib/services';
 import { CourseService, CategoryService, EnrollmentService, ProgressService } from '../../lib/lms';
-import { ShopService, OrderService } from '../../lib/commerce';
+import { ShopService, OrderService, VoucherService, productMinPrice, variantStock } from '../../lib/commerce';
 import { useApp, useDB } from '../../state/store';
 import { Icon, type IconName } from '../../components/icons';
 import { Avatar, Badge, EmptyState, Reveal, RichHTML, SafeImg, Select, YouTube } from '../../components/ui';
@@ -619,23 +619,108 @@ export function ContactPage() {
 
 /* ================= shop ================= */
 
+function VariantModal({ product, onClose, onAdded }: { product: Product; onClose: () => void; onAdded: () => void }) {
+  const { user, toast } = useApp();
+  const [variantId, setVariantId] = useState<string | null>(null);
+  const [qty, setQty] = useState(1);
+  const variants = product.variants ?? [];
+  const chosen = variants.find((v) => v.id === variantId);
+  const price = chosen ? chosen.price : productMinPrice(product);
+  const add = () => {
+    if (!user) return;
+    const r = ShopService.addToCart(user, product, qty, variantId);
+    if (!r.ok) { toast('error', r.error ?? 'Gagal.'); return; }
+    toast('success', `"${product.name}${chosen ? ` — ${chosen.label}` : ''}" masuk keranjang.`);
+    onAdded();
+    onClose();
+  };
+  return (
+    <div className="fixed inset-0 z-[88] flex items-end sm:items-center justify-center p-4">
+      <div className="absolute inset-0 bg-base-950/60 backdrop-blur-[3px] anim-fade" onClick={onClose} />
+      <div className="relative card w-full max-w-md p-5 anim-scale">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex gap-3">
+            <SafeImg src={product.thumbnail} alt={product.name} label={product.name} className="h-16 w-16 rounded-xl object-cover" />
+            <div>
+              <h3 className="font-display text-base font-bold text-base-900 dark:text-base-50">{product.name}</h3>
+              <p className="font-mono text-[10px] uppercase tracking-wide text-base-400">Pilih varian</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-base-400 hover:text-base-800 dark:hover:text-base-100 cursor-pointer"><Icon name="x" size={16} /></button>
+        </div>
+        <div className="mt-4 grid gap-2">
+          {variants.map((v) => {
+            const out = v.stock <= 0;
+            const sel = variantId === v.id;
+            return (
+              <button key={v.id} disabled={out} onClick={() => setVariantId(v.id)}
+                className={`flex items-center justify-between rounded-xl border-2 px-4 py-2.5 text-sm font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${sel ? 'border-brand-500 bg-brand-500/10 text-brand-700 dark:text-brand-300' : 'border-base-200 dark:border-base-700 text-base-700 dark:text-base-200 hover:border-brand-500/50'}`}>
+                <span>{v.label}{out && <span className="ml-2 font-mono text-[10px] text-danger-400">habis</span>}</span>
+                <span className="font-display">{fmtMoney(v.price)}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-4 flex items-center gap-3">
+          <div className="flex items-center rounded-lg border border-base-300 dark:border-base-700">
+            <button className="px-3 py-1.5 text-base-500 hover:text-brand-500 cursor-pointer" onClick={() => setQty(Math.max(1, qty - 1))}>−</button>
+            <span className="w-8 text-center font-mono text-sm font-bold">{qty}</span>
+            <button className="px-3 py-1.5 text-base-500 hover:text-brand-500 cursor-pointer" onClick={() => setQty(Math.min(chosen?.stock ?? 99, qty + 1))}>+</button>
+          </div>
+          <button className="btn-primary flex-1" disabled={!variantId} onClick={add}>
+            <Icon name="cart" size={14} /> Tambah · {fmtMoney(price * qty)}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ShopPage() {
   useDB();
   const { user, toast, t } = useApp();
   const nav = useNavigate();
   const [cartOpen, setCartOpen] = useState(false);
   const [cat, setCat] = useState('');
-  const products = ShopService.published().filter((p) => !cat || p.categoryId === cat);
+  const [kind, setKind] = useState<'all' | 'physical' | 'digital'>('all');
+  const [variantFor, setVariantFor] = useState<Product | null>(null);
+  const [voucherCode, setVoucherCode] = useState('');
+  const [appliedVoucher, setAppliedVoucher] = useState<{ code: string; discount: number } | null>(null);
+  const [voucherErr, setVoucherErr] = useState('');
+  const [ship, setShip] = useState({ name: user?.name ?? '', address: '', phone: user?.phone ?? '' });
+  const [busy, setBusy] = useState(false);
+
+  const products = ShopService.published().filter((p) =>
+    (!cat || p.categoryId === cat) && (kind === 'all' || (kind === 'digital' ? p.isDigital : !p.isDigital)));
   const cats = CategoryService.byScope('product');
-  const cart = user ? ShopService.cartDetail(user.id) : { items: [], subtotal: 0, count: 0 };
+  const cart = user ? ShopService.cartDetail(user.id) : { items: [], subtotal: 0, count: 0, hasPhysical: false, hasDigital: false };
+
+  const applyVoucher = () => {
+    setVoucherErr('');
+    if (!voucherCode.trim()) return;
+    const res = VoucherService.validate(voucherCode, cart.subtotal);
+    if (!res.ok) { setVoucherErr(res.error ?? 'Voucher tidak valid.'); setAppliedVoucher(null); return; }
+    setAppliedVoucher({ code: res.voucher!.code, discount: res.discount });
+    toast('success', `Voucher ${res.voucher!.code} diterapkan — hemat ${fmtMoney(res.discount)}.`);
+  };
 
   const checkout = () => {
     if (!user) { nav('/login?next=/shop'); return; }
-    const res = ShopService.checkout(user);
-    if (!res.ok || !res.order) { toast('error', res.error ?? 'Gagal checkout.'); return; }
-    setCartOpen(false);
-    nav(`/checkout/${res.order.id}`);
+    setBusy(true);
+    setTimeout(() => {
+      const res = ShopService.checkout(user, {
+        voucherCode: appliedVoucher?.code ?? '',
+        shipping: cart.hasPhysical ? ship : undefined,
+      });
+      setBusy(false);
+      if (!res.ok || !res.order) { toast('error', res.error ?? 'Gagal checkout.'); return; }
+      setCartOpen(false);
+      setAppliedVoucher(null); setVoucherCode('');
+      nav(`/checkout/${res.order.id}`);
+    }, 250);
   };
+
+  const totalStock = (p: Product) => (p.variants && p.variants.length > 0 ? p.variants.reduce((a, v) => a + v.stock, 0) : p.stock);
 
   return (
     <PublicShell>
@@ -644,45 +729,62 @@ export function ShopPage() {
           <div>
             <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-brand-500 flex items-center gap-2"><Icon name="store" size={14} /> Toko</p>
             <h1 className="mt-2 font-display text-3xl font-bold text-base-900 dark:text-base-50">{t('shop')}</h1>
+            <p className="mt-1 text-sm text-base-500 dark:text-base-400">Produk fisik & digital — produk digital dikirim otomatis tanpa pengiriman barang.</p>
           </div>
           <button className="btn-outline relative" onClick={() => setCartOpen(true)}>
             <Icon name="cart" size={16} /> {t('cart')}
             {cart.count > 0 && <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-400 px-1 font-mono text-[10px] font-bold text-base-950">{cart.count}</span>}
           </button>
         </div>
-        {cats.length > 0 && (
-          <div className="mb-6 flex flex-wrap gap-2">
-            <button onClick={() => setCat('')} className={`badge cursor-pointer transition-colors ${!cat ? 'bg-brand-500 text-base-950' : 'bg-base-100 dark:bg-base-800 text-base-500 hover:text-brand-500'}`}>Semua</button>
-            {cats.map((c) => (
-              <button key={c.id} onClick={() => setCat(c.id)} className={`badge cursor-pointer transition-colors ${cat === c.id ? 'bg-brand-500 text-base-950' : 'bg-base-100 dark:bg-base-800 text-base-500 hover:text-brand-500'}`}>{c.name}</button>
-            ))}
-          </div>
-        )}
+        <div className="mb-6 flex flex-wrap items-center gap-2 anim-rise">
+          {([['all', 'Semua'], ['physical', 'Fisik'], ['digital', 'Digital']] as const).map(([k, l]) => (
+            <button key={k} onClick={() => setKind(k)}
+              className={`rounded-lg px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${kind === k ? 'bg-base-900 dark:bg-base-50 text-base-50 dark:text-base-950' : 'bg-base-100 dark:bg-base-850 text-base-500 hover:text-base-900 dark:hover:text-base-100'}`}>
+              {l}
+            </button>
+          ))}
+          <span className="mx-2 hidden sm:block h-5 w-px bg-base-200 dark:bg-base-700" />
+          {cats.map((c) => (
+            <button key={c.id} onClick={() => setCat(cat === c.id ? '' : c.id)}
+              className={`badge cursor-pointer transition-colors ${cat === c.id ? 'bg-brand-500 text-base-950' : 'bg-base-100 dark:bg-base-800 text-base-500 hover:text-brand-500'}`}>{c.name}</button>
+          ))}
+        </div>
         {products.length === 0 ? (
-          <EmptyState icon="bag" title="Belum ada produk" sub="Produk toko akan tampil di sini." />
+          <EmptyState icon="bag" title="Belum ada produk" sub="Produk yang dipublikasikan dari dashboard toko akan tampil di sini." />
         ) : (
           <div className="grid gap-5 grid-cols-2 lg:grid-cols-4">
             {products.map((p, i) => {
-              const price = p.discountPrice > 0 && p.discountPrice < p.price ? p.discountPrice : p.price;
+              const price = productMinPrice(p);
+              const hasVariants = !!(p.variants && p.variants.length > 0);
+              const stock = totalStock(p);
               return (
                 <div key={p.id} className="card card-hover group overflow-hidden anim-rise" style={{ animationDelay: `${(i % 4) * 60}ms` }}>
                   <div className="relative overflow-hidden">
                     <SafeImg src={p.thumbnail} alt={p.name} label={p.name} className="aspect-square w-full object-cover transition-transform duration-500 group-hover:scale-[1.05]" />
-                    {p.stock <= 0 && <span className="absolute inset-0 flex items-center justify-center bg-base-950/60 font-display text-sm font-bold text-base-100">Stok Habis</span>}
+                    <div className="absolute left-2 top-2 flex flex-col gap-1.5">
+                      {p.isDigital && <Badge tone="accent"><Icon name="download" size={10} /> Digital</Badge>}
+                      {hasVariants && <Badge tone="info">{p.variants!.length} varian</Badge>}
+                    </div>
+                    {stock <= 0 && <span className="absolute inset-0 flex items-center justify-center bg-base-950/60 font-display text-sm font-bold text-base-100">Stok Habis</span>}
                   </div>
                   <div className="p-4">
                     <h3 className="font-display text-sm font-bold text-base-900 dark:text-base-50 line-clamp-2">{p.name}</h3>
-                    <p className="mt-1.5 font-display text-base font-bold text-brand-600 dark:text-brand-400">{fmtMoney(price)}
-                      {p.discountPrice > 0 && p.discountPrice < p.price && <span className="ml-1.5 text-[11px] font-normal text-base-400 line-through">{fmtMoney(p.price)}</span>}
+                    <p className="mt-1.5 font-display text-base font-bold text-brand-600 dark:text-brand-400">
+                      {hasVariants && <span className="mr-1 text-[10px] font-normal font-mono text-base-400">mulai</span>}
+                      {fmtMoney(price)}
+                      {!hasVariants && p.discountPrice > 0 && p.discountPrice < p.price && <span className="ml-1.5 text-[11px] font-normal text-base-400 line-through">{fmtMoney(p.price)}</span>}
                     </p>
-                    <p className="mt-0.5 font-mono text-[10px] text-base-400">{t('stock')}: {p.stock}</p>
-                    <button className="btn-primary btn-sm mt-3 w-full" disabled={p.stock <= 0}
+                    <p className="mt-0.5 font-mono text-[10px] text-base-400">
+                      {p.isDigital ? 'instan · tanpa ongkir' : `${t('stock')}: ${stock}`}
+                    </p>
+                    <button className="btn-primary btn-sm mt-3 w-full" disabled={stock <= 0}
                       onClick={() => {
                         if (!user) { nav('/login?next=/shop'); return; }
+                        if (hasVariants) { setVariantFor(p); return; }
                         const r = ShopService.addToCart(user, p);
                         toast(r.ok ? 'success' : 'error', r.ok ? `"${p.name}" masuk keranjang.` : r.error!);
                       }}>
-                      <Icon name="cart" size={13} /> {t('add_to_cart')}
+                      <Icon name="cart" size={13} /> {hasVariants ? 'Pilih Varian' : t('add_to_cart')}
                     </button>
                   </div>
                 </div>
@@ -691,6 +793,8 @@ export function ShopPage() {
           </div>
         )}
       </div>
+
+      {variantFor && <VariantModal product={variantFor} onClose={() => setVariantFor(null)} onAdded={() => setCartOpen(true)} />}
 
       {cartOpen && (
         <div className="fixed inset-0 z-[85]">
@@ -703,29 +807,81 @@ export function ShopPage() {
             <div className="flex-1 overflow-y-auto p-5">
               {cart.items.length === 0 ? (
                 <EmptyState icon="cart" title="Keranjang kosong" sub="Tambahkan produk untuk mulai belanja." />
-              ) : cart.items.map(({ item, product }) => (
-                <div key={item.id} className="mb-3 flex gap-3 rounded-xl border border-base-200 dark:border-base-800 p-3">
-                  <SafeImg src={product!.thumbnail} alt={product!.name} label={product!.name} className="h-16 w-16 rounded-lg object-cover" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold text-base-900 dark:text-base-50">{product!.name}</p>
-                    <p className="font-display text-sm font-bold text-brand-600 dark:text-brand-400">{fmtMoney(product!.discountPrice > 0 && product!.discountPrice < product!.price ? product!.discountPrice : product!.price)}</p>
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <button className="btn-ghost btn-sm !px-2" onClick={() => ShopService.setQty(user!, item.productId, item.qty - 1)}>−</button>
-                      <span className="w-6 text-center font-mono text-sm font-bold">{item.qty}</span>
-                      <button className="btn-ghost btn-sm !px-2" onClick={() => ShopService.setQty(user!, item.productId, item.qty + 1)}>+</button>
-                      <button className="ml-auto text-danger-400 hover:text-danger-500 cursor-pointer" onClick={() => ShopService.removeItem(user!, item.productId)}><Icon name="trash" size={14} /></button>
+              ) : (
+                <>
+                  {cart.items.map(({ item, product, variant, price }) => (
+                    <div key={item.id} className="mb-3 flex gap-3 rounded-xl border border-base-200 dark:border-base-800 p-3">
+                      <SafeImg src={product!.thumbnail} alt={product!.name} label={product!.name} className="h-16 w-16 rounded-lg object-cover" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-bold text-base-900 dark:text-base-50">{product!.name}</p>
+                        <div className="flex items-center gap-1.5">
+                          {variant && <Badge tone="info">{variant.label}</Badge>}
+                          {product!.isDigital && <Badge tone="accent"><Icon name="download" size={9} /> Digital</Badge>}
+                        </div>
+                        <p className="mt-1 font-display text-sm font-bold text-brand-600 dark:text-brand-400">{fmtMoney(price)}</p>
+                        <div className="mt-1.5 flex items-center gap-2">
+                          <button className="btn-ghost btn-sm !px-2" onClick={() => ShopService.setQty(user!, item.productId, item.qty - 1, item.variantId)}>−</button>
+                          <span className="w-6 text-center font-mono text-sm font-bold">{item.qty}</span>
+                          <button className="btn-ghost btn-sm !px-2" onClick={() => ShopService.setQty(user!, item.productId, item.qty + 1, item.variantId)}>+</button>
+                          <button className="ml-auto text-danger-400 hover:text-danger-500 cursor-pointer" onClick={() => ShopService.removeItem(user!, item.productId, item.variantId)}><Icon name="trash" size={14} /></button>
+                        </div>
+                      </div>
                     </div>
+                  ))}
+
+                  <div className="mt-4 rounded-xl border border-base-200 dark:border-base-800 p-3.5">
+                    <p className="label !mb-2"><Icon name="tag" size={11} className="inline mr-1 -mt-0.5" />Voucher</p>
+                    {appliedVoucher ? (
+                      <div className="flex items-center justify-between rounded-lg bg-ok-500/10 border border-ok-500/30 px-3 py-2">
+                        <span className="font-mono text-xs font-bold text-ok-500">{appliedVoucher.code} · −{fmtMoney(appliedVoucher.discount)}</span>
+                        <button className="text-xs font-bold text-base-400 hover:text-danger-500 cursor-pointer" onClick={() => { setAppliedVoucher(null); setVoucherCode(''); }}>Hapus</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex gap-2">
+                          <input value={voucherCode} onChange={(e) => setVoucherCode(e.target.value.toUpperCase())} placeholder="KODE-VOUCHER"
+                            className="input py-2 font-mono text-xs uppercase flex-1" onKeyDown={(e) => e.key === 'Enter' && applyVoucher()} />
+                          <button className="btn-outline btn-sm" onClick={applyVoucher}>Pakai</button>
+                        </div>
+                        {voucherErr && <p className="mt-1.5 text-[11px] font-semibold text-danger-500">{voucherErr}</p>}
+                      </>
+                    )}
                   </div>
-                </div>
-              ))}
+
+                  {cart.hasPhysical && (
+                    <div className="mt-4 rounded-xl border border-base-200 dark:border-base-800 p-3.5 space-y-2.5">
+                      <p className="label !mb-0"><Icon name="map-pin" size={11} className="inline mr-1 -mt-0.5" />Alamat Pengiriman (produk fisik)</p>
+                      <input value={ship.name} onChange={(e) => setShip({ ...ship, name: e.target.value })} placeholder="Nama penerima" className="input py-2 text-xs" />
+                      <input value={ship.phone} onChange={(e) => setShip({ ...ship, phone: e.target.value })} placeholder="No. HP" className="input py-2 text-xs font-mono" />
+                      <textarea value={ship.address} onChange={(e) => setShip({ ...ship, address: e.target.value })} placeholder="Alamat lengkap…" rows={2} className="textarea py-2 text-xs" />
+                    </div>
+                  )}
+                  {cart.hasDigital && !cart.hasPhysical && (
+                    <p className="mt-4 flex items-start gap-2 rounded-xl bg-brand-500/[0.07] border border-brand-500/25 p-3 text-[11px] leading-4 text-brand-700 dark:text-brand-300">
+                      <Icon name="download" size={13} className="mt-0.5 shrink-0" />
+                      Semua item digital — tidak perlu alamat pengiriman. File dikirim otomatis setelah pembayaran.
+                    </p>
+                  )}
+                </>
+              )}
             </div>
             <div className="border-t border-base-200 dark:border-base-800 p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="text-sm font-bold text-base-500">Subtotal</span>
-                <span className="font-display text-lg font-bold text-base-900 dark:text-base-50">{fmtMoney(cart.subtotal)}</span>
+              <div className="mb-1 flex items-center justify-between text-sm">
+                <span className="font-bold text-base-500">Subtotal</span>
+                <span className="font-mono text-base-700 dark:text-base-200">{fmtMoney(cart.subtotal)}</span>
               </div>
-              <button className="btn-primary w-full py-3" onClick={checkout} disabled={cart.items.length === 0}>
-                <Icon name="card" size={16} /> {t('checkout')} · Payment Gateway
+              {appliedVoucher && (
+                <div className="mb-1 flex items-center justify-between text-sm">
+                  <span className="font-bold text-ok-500">Diskon voucher</span>
+                  <span className="font-mono text-ok-500">−{fmtMoney(appliedVoucher.discount)}</span>
+                </div>
+              )}
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-sm font-bold text-base-500">Total</span>
+                <span className="font-display text-lg font-bold text-base-900 dark:text-base-50">{fmtMoney(Math.max(0, cart.subtotal - (appliedVoucher?.discount ?? 0)))}</span>
+              </div>
+              <button className="btn-primary w-full py-3" onClick={checkout} disabled={cart.items.length === 0 || busy}>
+                <Icon name="card" size={16} /> {busy ? 'Membuat order…' : `${t('checkout')} · Payment Gateway`}
               </button>
             </div>
           </div>

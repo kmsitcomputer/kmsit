@@ -116,11 +116,12 @@ export interface MediaItem extends Row { name: string; mime: string; size: numbe
 
 /* ---------------- commerce ---------------- */
 export type OrderStatus = 'pending' | 'paid' | 'failed' | 'expired';
-export interface OrderItem { kind: 'course' | 'product'; refId: ID; title: string; price: number; qty: number; instructorId: ID | null; thumbnail?: string | null; }
+export interface OrderItem { kind: 'course' | 'product'; refId: ID; title: string; price: number; qty: number; instructorId: ID | null; thumbnail?: string | null; variantId?: string | null; variantLabel?: string | null; isDigital?: boolean; }
 export interface Order extends Row {
   userId: ID; type: 'course' | 'shop'; status: OrderStatus;
-  subtotal: number; gatewayFee: number; total: number; currency: string;
+  subtotal: number; discountAmount: number; voucherCode: string | null; gatewayFee: number; total: number; currency: string;
   items: OrderItem[]; paidAt: number | null;
+  needsShipping: boolean; shippingName?: string; shippingAddress?: string; shippingPhone?: string;
 }
 
 export type GatewayKey = 'tripay' | 'xendit' | 'stripe';
@@ -143,12 +144,25 @@ export interface Withdrawal extends Row {
   notes: string; status: WithdrawalStatus; processedBy: ID | null; processedAt: number | null; adminNote: string;
 }
 
+export interface ProductVariant { id: string; label: string; price: number; stock: number; }
 export interface Product extends Row {
   name: string; slug: string; description: string; thumbnail?: string | null;
   price: number; discountPrice: number; stock: number; categoryId: ID | null;
   status: ContentStatus; featured: boolean;
+  isDigital: boolean; digitalFileUrl?: string | null; variants: ProductVariant[] | null;
 }
-export interface CartItem extends Row { userId: ID; productId: ID; qty: number; }
+export interface CartItem extends Row { userId: ID; productId: ID; qty: number; variantId: string | null; }
+
+/* ---------------- shop: voucher & digital delivery ---------------- */
+export interface Voucher extends Row {
+  code: string; type: 'percent' | 'fixed'; value: number;
+  minOrder: number; maxDiscount: number; usageLimit: number; usedCount: number;
+  expiresAt: number | null; active: boolean; note: string;
+}
+export interface DigitalDelivery extends Row {
+  userId: ID; productId: ID; orderItemId: ID | null;
+  licenseKey: string; downloadUrl: string; downloads: number; status: 'active' | 'revoked';
+}
 
 /* ---------------- system ---------------- */
 export interface Notification extends Row { userId: ID; title: string; body: string; link: string; read: boolean; kind: 'info' | 'success' | 'warning' | 'danger'; }
@@ -169,7 +183,7 @@ export interface Schema {
   homepageBlocks: HomeBlock[]; menus: Menu[]; menuItems: MenuItem[]; media: MediaItem[];
   orders: Order[]; payments: Payment[]; webhookLogs: WebhookLog[];
   walletTx: WalletTx[]; withdrawals: Withdrawal[];
-  products: Product[]; cartItems: CartItem[];
+  products: Product[]; cartItems: CartItem[]; vouchers: Voucher[]; digitalDeliveries: DigitalDelivery[];
   notifications: Notification[]; auditLogs: AuditLog[]; contactMessages: ContactMessage[];
   settings: Record<string, string>;
 }
@@ -193,7 +207,7 @@ const emptyTables = (): Schema => ({
   homepageBlocks: [], menus: [], menuItems: [], media: [],
   orders: [], payments: [], webhookLogs: [],
   walletTx: [], withdrawals: [],
-  products: [], cartItems: [],
+  products: [], cartItems: [], vouchers: [], digitalDeliveries: [],
   notifications: [], auditLogs: [], contactMessages: [],
   settings: {},
 });
@@ -286,7 +300,7 @@ export const PERMISSIONS: Record<RoleKey, string[]> = {
     'manage_media', 'manage_menus', 'manage_homepage', 'manage_about',
     'manage_courses', 'moderate_courses', 'manage_categories', 'manage_quizzes', 'manage_certificates',
     'manage_students', 'manage_instructors',
-    'manage_orders', 'view_payments', 'process_withdrawals', 'manage_shop',
+    'manage_orders', 'view_payments', 'process_withdrawals', 'manage_shop', 'manage_vouchers',
     'view_reports', 'view_messages',
   ],
   instructor: [

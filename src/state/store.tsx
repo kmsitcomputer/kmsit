@@ -27,6 +27,8 @@ interface AppState {
   dismissToast: (id: number) => void;
 }
 
+const DEFAULT_FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='22' height='22' rx='6' fill='%2314b8a6'/%3E%3Cpath d='M8 6v12M8 12l6-5M8 12l6 5' stroke='%2304211d' stroke-width='2.4' stroke-linecap='round' fill='none'/%3E%3C/svg%3E";
+
 const Ctx = createContext<AppState | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -45,6 +47,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     mq.addEventListener('change', apply);
     return () => mq.removeEventListener('change', apply);
   }, [theme]);
+
+  /* favicon dinamis dari settings CMS */
+  const rev = useDB();
+  useEffect(() => {
+    const fav = db.settings().favicon || '';
+    let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+    link.type = fav.includes('svg') ? 'image/svg+xml' : 'image/png';
+    link.href = fav || DEFAULT_FAVICON;
+  }, [rev]);
 
   const setTheme = useCallback((t: ThemeMode) => { setThemeState(t); localStorage.setItem('kmsit_pref_theme', t); }, []);
   const setLang = useCallback((l: Lang) => { setLangState(l); localStorage.setItem('kmsit_pref_lang', l); }, []);

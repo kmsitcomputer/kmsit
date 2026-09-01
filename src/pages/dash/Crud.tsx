@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { db, uid, now, type Row, type ID, type Category, type Certificate } from '../../lib/db';
+import { db, uid, now, type Row, type ID, type Category, type Certificate, type ProductVariant } from '../../lib/db';
 import { fmtDate, MediaService, uniqueSlug, audit } from '../../lib/services';
 import { CategoryService, CertificateService } from '../../lib/lms';
 import { CertificateModal } from '../public/Certificates';
@@ -12,7 +12,7 @@ import { DashShell } from '../../components/Shell';
 
 /* ================= generic content module ================= */
 
-type FieldType = 'text' | 'textarea' | 'richtext' | 'media' | 'category' | 'tags' | 'lines' | 'date' | 'time' | 'number' | 'url' | 'toggle';
+type FieldType = 'text' | 'textarea' | 'richtext' | 'media' | 'category' | 'tags' | 'lines' | 'date' | 'time' | 'number' | 'url' | 'toggle' | 'variants';
 interface FieldDef { name: string; label: string; type: FieldType; required?: boolean; hint?: string; span2?: boolean; scope?: Category['scope']; }
 export interface ModuleDef {
   key: string; table: 'articles' | 'news' | 'tutorials' | 'activities' | 'pages' | 'products';
@@ -100,9 +100,12 @@ export const MODULES: Record<string, ModuleDef> = {
       { name: 'thumbnail', label: 'Foto Produk', type: 'media' },
       { name: 'price', label: 'Harga', type: 'number', required: true },
       { name: 'discountPrice', label: 'Harga Diskon', type: 'number', hint: '0 = tanpa diskon' },
-      { name: 'stock', label: 'Stok', type: 'number' },
+      { name: 'stock', label: 'Stok', type: 'number', hint: 'Otomatis dari total varian jika ada' },
+      { name: 'isDigital', label: 'Produk Digital', type: 'toggle', hint: 'Dikirim otomatis, tanpa pengiriman barang' },
+      { name: 'digitalFileUrl', label: 'File Digital', type: 'media', hint: 'Diberikan ke pembeli setelah pembayaran' },
+      { name: 'variants', label: 'Varian Produk', type: 'variants', span2: true, hint: 'cth: ukuran/warna/versi dengan harga & stok masing-masing' },
     ],
-    defaults: { name: '', description: '', thumbnail: null, price: 0, discountPrice: 0, stock: 10, categoryId: null, status: 'draft', featured: false },
+    defaults: { name: '', description: '', thumbnail: null, price: 0, discountPrice: 0, stock: 10, categoryId: null, status: 'draft', featured: false, isDigital: false, digitalFileUrl: null, variants: null },
   },
 };
 
@@ -121,9 +124,43 @@ function toFormValue(def: ModuleDef, row: Row | null): Record<string, unknown> {
   return out;
 }
 
+function VariantEditor({ value, onChange }: { value: ProductVariant[]; onChange: (v: ProductVariant[]) => void }) {
+  const rows = value ?? [];
+  const upd = (id: string, patch: Partial<ProductVariant>) => onChange(rows.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+  return (
+    <div className="rounded-xl border border-base-200 dark:border-base-800">
+      {rows.length === 0 ? (
+        <p className="px-4 py-4 text-xs text-base-400">Tidak ada varian — produk dijual sebagai satu varian dengan harga & stok utama.</p>
+      ) : (
+        <div className="divide-y divide-base-100 dark:divide-base-800">
+          <div className="grid grid-cols-[1.4fr_1fr_0.8fr_36px] gap-2 px-3 pt-3 pb-1 font-mono text-[9px] uppercase tracking-wider text-base-400">
+            <span>Label Varian</span><span>Harga</span><span>Stok</span><span />
+          </div>
+          {rows.map((v) => (
+            <div key={v.id} className="grid grid-cols-[1.4fr_1fr_0.8fr_36px] items-center gap-2 px-3 py-2">
+              <TextInput value={v.label} onChange={(e) => upd(v.id, { label: e.target.value })} placeholder="cth: 128 GB / Merah" className="py-1.5 text-xs" />
+              <TextInput type="number" min={0} value={v.price || ''} onChange={(e) => upd(v.id, { price: Number(e.target.value) })} className="py-1.5 text-xs font-mono" />
+              <TextInput type="number" min={0} value={v.stock || ''} onChange={(e) => upd(v.id, { stock: Number(e.target.value) })} className="py-1.5 text-xs font-mono" />
+              <button className="justify-self-center rounded-md p-1.5 text-base-400 hover:bg-danger-500/12 hover:text-danger-500 cursor-pointer" onClick={() => onChange(rows.filter((x) => x.id !== v.id))} title="Hapus varian">
+                <Icon name="trash" size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="border-t border-base-200 dark:border-base-800 p-2.5">
+        <button type="button" className="btn-outline btn-sm" onClick={() => onChange([...rows, { id: uid().slice(0, 8), label: '', price: 0, stock: 0 }])}>
+          <Icon name="plus" size={12} /> Tambah Varian
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function FieldInput({ fd, value, onChange }: { fd: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
   const [mediaOpen, setMediaOpen] = useState(false);
   switch (fd.type) {
+    case 'variants': return <VariantEditor value={(value as ProductVariant[]) ?? []} onChange={(v) => onChange(v && v.length > 0 ? v : null)} />;
     case 'text': return <TextInput value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />;
     case 'textarea': return <TextArea rows={3} value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />;
     case 'richtext': return <RichText value={String(value ?? '')} onChange={(html) => onChange(html)} />;
@@ -182,7 +219,12 @@ export function ContentModule({ def }: { def: ModuleDef }) {
     if ('galleryLines' in patch) { patch.gallery = String(patch.galleryLines ?? '').split('\n').map((s: string) => s.trim()).filter(Boolean); delete patch.galleryLines; }
     delete patch.lines;
     if (status === 'published' && !(editing !== 'new' && (editing as { publishedAt?: number | null }).publishedAt)) patch.publishedAt = now();
-    if (def.table === 'products') { patch.price = Number(patch.price) || 0; patch.discountPrice = Number(patch.discountPrice) || 0; patch.stock = Number(patch.stock) || 0; }
+    if (def.table === 'products') {
+      patch.price = Number(patch.price) || 0; patch.discountPrice = Number(patch.discountPrice) || 0; patch.stock = Number(patch.stock) || 0;
+      const vs = Array.isArray(patch.variants) ? (patch.variants as ProductVariant[]).map((v) => ({ ...v, label: v.label.trim(), price: Number(v.price) || 0, stock: Number(v.stock) || 0 })).filter((v) => v.label) : null;
+      patch.variants = vs && vs.length > 0 ? vs : null;
+      if (patch.variants) patch.stock = (patch.variants as ProductVariant[]).reduce((a, v) => a + v.stock, 0);
+    }
     if (editing === 'new') {
       patch.authorId = user.id;
       db.insert(def.table, patch as never);
@@ -225,7 +267,21 @@ export function ContentModule({ def }: { def: ModuleDef }) {
             );
           }},
           { key: 'cat', label: 'Kategori', render: (r: Row) => <span className="text-xs font-semibold text-base-500">{CategoryService.name((r as { categoryId?: ID | null }).categoryId ?? null)}</span> },
-          ...(def.table === 'products' ? [{ key: 'price', label: 'Harga', render: (r: Row) => <span className="font-display text-sm font-bold">{Number((r as { price?: number }).price ?? 0).toLocaleString('id-ID')}</span> }] : []),
+          ...(def.table === 'products' ? [{ key: 'price', label: 'Harga & Tipe', render: (r: Row) => {
+            const rec = r as unknown as { price?: number; discountPrice?: number; variants?: ProductVariant[] | null; isDigital?: boolean; stock?: number };
+            const vs = rec.variants && rec.variants.length > 0 ? rec.variants : null;
+            const min = vs ? Math.min(...vs.map((v) => v.price)) : rec.discountPrice && rec.discountPrice > 0 && rec.discountPrice < (rec.price ?? 0) ? rec.discountPrice : rec.price ?? 0;
+            return (
+              <div>
+                <span className="font-display text-sm font-bold">{vs && <span className="mr-1 font-mono text-[9px] font-normal text-base-400">mulai</span>}{min.toLocaleString('id-ID')}</span>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  {rec.isDigital && <Badge tone="accent"><Icon name="download" size={9} /> Digital</Badge>}
+                  {vs && <Badge tone="info">{vs.length} varian</Badge>}
+                  <span className="font-mono text-[9px] text-base-400">stok {rec.stock ?? 0}</span>
+                </div>
+              </div>
+            );
+          } }] : []),
           { key: 'date', label: 'Tanggal', render: (r: Row) => <span className="font-mono text-[11px] text-base-400">{fmtDate(r.createdAt)}</span> },
           { key: 'status', label: 'Status', render: (r: Row) => <StatusBadge status={String((r as { status?: string }).status ?? 'draft')} /> },
         ]}

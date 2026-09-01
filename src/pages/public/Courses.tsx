@@ -693,8 +693,9 @@ export function CheckoutPage() {
     }
   };
 
+  const payable = Math.max(0, order.subtotal - (order.discountAmount || 0));
   const chosenMethod = gw.methods.find((m) => m.key === method);
-  const fee = chosenMethod ? (chosenMethod.fee.kind === 'flat' ? chosenMethod.fee.value : Math.round((order.subtotal * chosenMethod.fee.value) / 100)) : 0;
+  const fee = chosenMethod ? (chosenMethod.fee.kind === 'flat' ? chosenMethod.fee.value : Math.round((payable * chosenMethod.fee.value) / 100)) : 0;
 
   return (
     <PublicShell>
@@ -731,7 +732,7 @@ export function CheckoutPage() {
                   ))}
                 </div>
                 <button className="btn-primary mt-6 w-full py-3" disabled={!method} onClick={() => pay('paid')}>
-                  <Icon name="card" size={16} /> Bayar {fmtMoney(order.subtotal + fee)}
+                  <Icon name="card" size={16} /> Bayar {fmtMoney(payable + fee)}
                 </button>
                 {mode === 'sandbox' && (
                   <div className="mt-3 rounded-xl border border-warn-400/30 bg-warn-400/[0.07] p-3.5">
@@ -794,9 +795,26 @@ export function CheckoutPage() {
             ))}
             <div className="mt-3 space-y-1.5 text-sm">
               <p className="flex justify-between text-base-500"><span>Subtotal</span><span className="font-mono">{fmtMoney(order.subtotal)}</span></p>
+              {order.discountAmount > 0 && (
+                <p className="flex justify-between font-semibold text-ok-500"><span className="flex items-center gap-1.5"><Icon name="tag" size={12} />Voucher {order.voucherCode}</span><span className="font-mono">−{fmtMoney(order.discountAmount)}</span></p>
+              )}
               <p className="flex justify-between text-base-500"><span>Biaya gateway</span><span className="font-mono">{fmtMoney(fee)}</span></p>
-              <p className="flex justify-between border-t border-base-200 dark:border-base-700 pt-2 font-display text-base font-bold text-base-900 dark:text-base-50"><span>Total</span><span>{fmtMoney(order.subtotal + fee)}</span></p>
+              <p className="flex justify-between border-t border-base-200 dark:border-base-700 pt-2 font-display text-base font-bold text-base-900 dark:text-base-50"><span>Total</span><span>{fmtMoney(payable + fee)}</span></p>
             </div>
+            {order.type === 'shop' && (
+              order.needsShipping ? (
+                <div className="mt-4 rounded-lg bg-base-100 dark:bg-base-850 p-3.5">
+                  <p className="label !mb-1">Kirim ke</p>
+                  <p className="text-sm font-bold text-base-800 dark:text-base-100">{order.shippingName} · {order.shippingPhone}</p>
+                  <p className="text-xs leading-5 text-base-500">{order.shippingAddress}</p>
+                </div>
+              ) : (
+                <p className="mt-4 flex items-start gap-2 rounded-lg bg-brand-500/[0.07] border border-brand-500/25 p-3 text-[11px] leading-4 text-brand-700 dark:text-brand-300">
+                  <Icon name="download" size={14} className="mt-0.5 shrink-0" />
+                  Produk digital — tanpa pengiriman. File & license key otomatis tersedia di Dashboard → Produk Digital setelah pembayaran berhasil.
+                </p>
+              )
+            )}
             <p className="mt-4 flex items-start gap-2 rounded-lg bg-base-100 dark:bg-base-850 p-3 text-[11px] leading-4 text-base-400">
               <Icon name="shield" size={14} className="mt-0.5 shrink-0 text-brand-500" />
               Status diverifikasi via callback/webhook + signature. Proteksi duplikasi aktif — webhook ganda tidak memproses ulang.

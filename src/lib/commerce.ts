@@ -1,4 +1,4 @@
-import { db, uid, now, type ID, type User, type Order, type OrderItem, type Payment, type GatewayKey, type Course, type Product, type Withdrawal, type WalletTx } from './db';
+import { db, uid, now, type ID, type User, type Order, type OrderItem, type Payment, type GatewayKey, type Course, type Product, type ProductVariant, type Withdrawal, type WalletTx, type Voucher, type DigitalDelivery } from './db';
 import { audit, fnv1a, getSetting, notify, notifyAdmins, setSettings } from './services';
 import { CourseService, EnrollmentService } from './lms';
 
@@ -70,8 +70,9 @@ export const OrderService = {
     const price = CourseService.effectivePrice(course);
     const item: OrderItem = { kind: 'course', refId: course.id, title: course.title, price, qty: 1, instructorId: course.instructorId, thumbnail: course.thumbnail };
     const order = db.insert('orders', {
-      userId: user.id, type: 'course', status: 'pending', subtotal: price, gatewayFee: 0,
-      total: price, currency: getSetting('currency', 'IDR'), items: [item], paidAt: null,
+      userId: user.id, type: 'course', status: 'pending', subtotal: price, discountAmount: 0, voucherCode: null,
+      gatewayFee: 0, total: price, currency: getSetting('currency', 'IDR'), items: [item], paidAt: null,
+      needsShipping: false,
     });
     audit(user.id, user.name, 'create', 'order', order.id, `Order kelas "${course.title}"`);
     if (course.isFree || price === 0) {
@@ -82,16 +83,21 @@ export const OrderService = {
     return { order, free: false };
   },
 
-  createShopOrder(user: User, items: OrderItem[], gatewayFee = 0): Order {
+  createShopOrder(user: User, items: OrderItem[], opts: { discountAmount?: number; voucherCode?: string | null; needsShipping?: boolean; shippingName?: string; shippingAddress?: string; shippingPhone?: string } = {}): Order {
     const subtotal = items.reduce((a, i) => a + i.price * i.qty, 0);
+    const discount = Math.min(opts.discountAmount ?? 0, subtotal);
     const order = db.insert('orders', {
-      userId: user.id, type: 'shop', status: 'pending', subtotal, gatewayFee,
-      total: subtotal + gatewayFee, currency: getSetting('currency', 'IDR'), items, paidAt: null,
+      userId: user.id, type: 'shop', status: 'pending', subtotal, discountAmount: discount,
+      voucherCode: opts.voucherCode ?? null, gatewayFee: 0,
+      total: subtotal - discount, currency: getSetting('currency', 'IDR'), items, paidAt: null,
+      needsShipping: opts.needsShipping ?? false, shippingName: opts.shippingName, shippingAddress: opts.shippingAddress, shippingPhone: opts.shippingPhone,
     });
-    audit(user.id, user.name, 'create', 'order', order.id, `Order shop (${items.length} item)`);
+    audit(user.id, user.name, 'create', 'order', order.id, `Order shop (${items.length} item)${opts.voucherCode ? ` · voucher ${opts.voucherCode}` : ''}`);
     return order;
   },
 };
+
+export const orderPayable = (order: Order): number => Math.max(0, order.subtotal - (order.discountAmount || 0));
 
 /* ================= payments & webhook ================= */
 
@@ -102,10 +108,11 @@ export const PaymentService = {
 
   initiate(order: Order, gw: GatewayKey, methodKey: string): Payment {
     const gwInfo = GATEWAYS.find((g) => g.key === gw)!;
-    const fee = computeFee(gw, methodKey, order.subtotal);
+    const payable = orderPayable(order);
+    const fee = computeFee(gw, methodKey, payable);
     const method = gwInfo.methods.find((m) => m.key === methodKey);
     const reference = `${gw.toUpperCase()}-${Date.now().toString(36).toUpperCase()}-${uid().slice(-5).toUpperCase()}`;
-    const amount = order.subtotal + fee;
+    const amount = payable + fee;
     const signature = sign(reference, amount, gw);
     db.update('orders', order.id, { gatewayFee: fee, total: amount });
     const payment = db.insert('payments', {
@@ -167,7 +174,7 @@ export const PaymentService = {
   },
 };
 
-/** Fulfillment: enrollment + wallet + stock — dijalankan sekali per order (idempotent). */
+/** Fulfillment: enrollment + wallet + stock + digital delivery — dijalankan sekali per order (idempotent). */
 function fulfillOrder(order: Order, payment: Payment) {
   const buyer = db.byId('users', order.userId);
   order.items.forEach((item) => {
@@ -179,10 +186,23 @@ function fulfillOrder(order: Order, payment: Payment) {
       }
     } else {
       const product = db.byId('products', item.refId);
-      if (product) db.update('products', product.id, { stock: Math.max(0, product.stock - item.qty) });
+      if (product) {
+        if (item.variantId && product.variants) {
+          db.update('products', product.id, {
+            variants: product.variants.map((v) => v.id === item.variantId ? { ...v, stock: Math.max(0, v.stock - item.qty) } : v),
+          });
+        } else {
+          db.update('products', product.id, { stock: Math.max(0, product.stock - item.qty) });
+        }
+        if (product.isDigital && buyer) {
+          const delivery = DeliveryService.issue(buyer, product, item);
+          notify(buyer.id, 'Produk digital siap diunduh', `"${product.name}" tersedia di menu Produk Digital. License: ${delivery.licenseKey}`, '/dashboard/digital', 'success');
+        }
+      }
     }
   });
-  if (buyer) notify(buyer.id, 'Pembayaran berhasil', `Order ${payment.reference} telah dibayar. Terima kasih!`, order.type === 'course' ? '/dashboard/my-learning' : '/dashboard/orders', 'success');
+  if (order.voucherCode) VoucherService.recordUsage(order.voucherCode);
+  if (buyer) notify(buyer.id, 'Pembayaran berhasil', `Order ${payment.reference} telah dibayar. Terima kasih!`, order.type === 'course' ? '/dashboard/my-learning' : order.items.some((i) => i.isDigital) ? '/dashboard/digital' : '/dashboard/orders', 'success');
 }
 
 /* ================= instructor wallet (ledger) ================= */
@@ -258,50 +278,152 @@ export const WithdrawalService = {
 
 /* ================= shop / cart ================= */
 
+/* ================= vouchers ================= */
+
+export const VoucherService = {
+  list: () => db.all('vouchers').slice().sort((a, b) => b.createdAt - a.createdAt),
+  byCode: (code: string) => db.find('vouchers', (v) => v.code.toLowerCase() === code.trim().toLowerCase()),
+
+  create(data: Omit<Voucher, 'id' | 'createdAt' | 'updatedAt' | 'usedCount'>): { ok: boolean; error?: string; voucher?: Voucher } {
+    if (!data.code.trim()) return { ok: false, error: 'Kode voucher wajib diisi.' };
+    if (VoucherService.byCode(data.code)) return { ok: false, error: `Kode "${data.code}" sudah digunakan.` };
+    if (data.value <= 0) return { ok: false, error: 'Nilai voucher harus lebih dari 0.' };
+    if (data.type === 'percent' && data.value > 100) return { ok: false, error: 'Diskon persen maksimal 100.' };
+    const voucher = db.insert('vouchers', { ...data, code: data.code.trim().toUpperCase(), usedCount: 0 });
+    return { ok: true, voucher };
+  },
+  update(id: ID, patch: Partial<Voucher>) { db.update('vouchers', id, patch); },
+  remove(id: ID) { db.remove('vouchers', id); },
+
+  /** Validasi + hitung diskon — semua logika di backend. */
+  validate(code: string, subtotal: number): { ok: boolean; discount: number; voucher?: Voucher; error?: string } {
+    const v = VoucherService.byCode(code);
+    if (!v) return { ok: false, discount: 0, error: 'Kode voucher tidak ditemukan.' };
+    if (!v.active) return { ok: false, discount: 0, error: 'Voucher tidak aktif.' };
+    if (v.expiresAt && v.expiresAt < now()) return { ok: false, discount: 0, error: 'Voucher sudah kadaluarsa.' };
+    if (v.usageLimit > 0 && v.usedCount >= v.usageLimit) return { ok: false, discount: 0, error: 'Kuota penggunaan voucher habis.' };
+    if (subtotal < v.minOrder) return { ok: false, discount: 0, error: `Minimal belanja ${v.minOrder.toLocaleString('id-ID')} untuk voucher ini.` };
+    let discount = v.type === 'percent' ? Math.round((subtotal * v.value) / 100) : v.value;
+    if (v.maxDiscount > 0) discount = Math.min(discount, v.maxDiscount);
+    discount = Math.min(discount, subtotal);
+    return { ok: true, discount, voucher: v };
+  },
+
+  /** Dipanggil sekali saat fulfillment order (idempotent karena order diproses sekali). */
+  recordUsage(code: string) {
+    const v = VoucherService.byCode(code);
+    if (v) db.update('vouchers', v.id, { usedCount: v.usedCount + 1 });
+  },
+};
+
+/* ================= digital delivery ================= */
+
+const genLicenseKey = () => {
+  const block = () => Array.from(crypto.getRandomValues(new Uint8Array(2))).map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase().slice(0, 4);
+  return `KMSIT-${block()}-${block()}-${block()}`;
+};
+
+export const DeliveryService = {
+  ofUser: (userId: ID) => db.where('digitalDeliveries', (d) => d.userId === userId).slice().sort((a, b) => b.createdAt - a.createdAt),
+  issue(user: User, product: Product, item: OrderItem): DigitalDelivery {
+    return db.insert('digitalDeliveries', {
+      userId: user.id, productId: product.id, orderItemId: null,
+      licenseKey: genLicenseKey(), downloadUrl: product.digitalFileUrl ?? '', downloads: 0, status: 'active',
+    });
+  },
+  markDownloaded(id: ID) {
+    const d = db.byId('digitalDeliveries', id);
+    if (d) db.update('digitalDeliveries', id, { downloads: d.downloads + 1 });
+  },
+};
+
+/* ================= shop / cart ================= */
+
+export const productUnitPrice = (p: Product, variantId?: string | null): number => {
+  if (variantId && p.variants) {
+    const v = p.variants.find((x) => x.id === variantId);
+    if (v) return v.price;
+  }
+  return p.discountPrice > 0 && p.discountPrice < p.price ? p.discountPrice : p.price;
+};
+export const productMinPrice = (p: Product): number => {
+  if (p.variants && p.variants.length > 0) return Math.min(...p.variants.map((v) => v.price));
+  return p.discountPrice > 0 && p.discountPrice < p.price ? p.discountPrice : p.price;
+};
+export const variantStock = (p: Product, variantId: string | null): number => {
+  if (variantId && p.variants) return p.variants.find((v) => v.id === variantId)?.stock ?? 0;
+  return p.stock;
+};
+
 export const ShopService = {
   products: () => db.all('products'),
   published: () => db.where('products', (p) => p.status === 'published'),
   cartOf: (userId: ID) => db.where('cartItems', (c) => c.userId === userId),
   cartDetail(userId: ID) {
-    const items = ShopService.cartOf(userId).map((c) => ({ item: c, product: db.byId('products', c.productId) })).filter((x) => !!x.product);
-    const subtotal = items.reduce((a, x) => a + (x.product!.discountPrice > 0 && x.product!.discountPrice < x.product!.price ? x.product!.discountPrice : x.product!.price) * x.item.qty, 0);
-    return { items, subtotal, count: items.reduce((a, x) => a + x.item.qty, 0) };
+    const items = ShopService.cartOf(userId)
+      .map((c) => ({ item: c, product: db.byId('products', c.productId) }))
+      .filter((x) => !!x.product)
+      .map((x) => {
+        const p = x.product!;
+        const variant = x.item.variantId && p.variants ? p.variants.find((v) => v.id === x.item.variantId) ?? null : null;
+        return { ...x, variant, price: productUnitPrice(p, x.item.variantId), maxQty: variantStock(p, x.item.variantId) };
+      });
+    const subtotal = items.reduce((a, x) => a + x.price * x.item.qty, 0);
+    return { items, subtotal, count: items.reduce((a, x) => a + x.item.qty, 0), hasPhysical: items.some((x) => !x.product!.isDigital), hasDigital: items.some((x) => x.product!.isDigital) };
   },
-  addToCart(user: User, product: Product, qty = 1): { ok: boolean; error?: string } {
-    if (product.stock <= 0) return { ok: false, error: 'Stok habis.' };
-    const existing = db.find('cartItems', (c) => c.userId === user.id && c.productId === product.id);
-    if (existing) {
-      const nextQty = Math.min(product.stock, existing.qty + qty);
-      db.update('cartItems', existing.id, { qty: nextQty });
-    } else {
-      db.insert('cartItems', { userId: user.id, productId: product.id, qty: Math.min(product.stock, qty) });
-    }
+  addToCart(user: User, product: Product, qty = 1, variantId: string | null = null): { ok: boolean; error?: string } {
+    if (product.variants && product.variants.length > 0 && !variantId) return { ok: false, error: 'Pilih varian terlebih dahulu.' };
+    const max = variantStock(product, variantId);
+    if (max <= 0) return { ok: false, error: 'Stok habis.' };
+    const existing = db.find('cartItems', (c) => c.userId === user.id && c.productId === product.id && (c.variantId ?? null) === variantId);
+    if (existing) db.update('cartItems', existing.id, { qty: Math.min(max, existing.qty + qty) });
+    else db.insert('cartItems', { userId: user.id, productId: product.id, qty: Math.min(max, qty), variantId });
     return { ok: true };
   },
-  setQty(user: User, productId: ID, qty: number) {
-    const item = db.find('cartItems', (c) => c.userId === user.id && c.productId === productId);
+  setQty(user: User, productId: ID, qty: number, variantId: string | null = null) {
+    const item = db.find('cartItems', (c) => c.userId === user.id && c.productId === productId && (c.variantId ?? null) === variantId);
     if (!item) return;
-    const product = db.byId('products', productId);
     if (qty <= 0) { db.remove('cartItems', item.id); return; }
-    db.update('cartItems', item.id, { qty: product ? Math.min(product.stock, qty) : qty });
+    const product = db.byId('products', productId);
+    const max = product ? variantStock(product, variantId) : qty;
+    db.update('cartItems', item.id, { qty: Math.min(max, qty) });
   },
-  removeItem(user: User, productId: ID) {
-    const item = db.find('cartItems', (c) => c.userId === user.id && c.productId === productId);
+  removeItem(user: User, productId: ID, variantId: string | null = null) {
+    const item = db.find('cartItems', (c) => c.userId === user.id && c.productId === productId && (c.variantId ?? null) === variantId);
     if (item) db.remove('cartItems', item.id);
   },
   clear(user: User) { ShopService.cartOf(user.id).forEach((c) => db.remove('cartItems', c.id)); },
-  checkout(user: User): { ok: boolean; error?: string; order?: Order } {
-    const { items, subtotal } = ShopService.cartDetail(user.id);
-    if (items.length === 0) return { ok: false, error: 'Keranjang kosong.' };
-    for (const x of items) {
-      if (!x.product || x.product.stock < x.item.qty) return { ok: false, error: `Stok "${x.product?.name}" tidak mencukupi.` };
+
+  checkout(user: User, opts: { voucherCode?: string; shipping?: { name: string; address: string; phone: string } } = {}): { ok: boolean; error?: string; order?: Order } {
+    const cart = ShopService.cartDetail(user.id);
+    if (cart.items.length === 0) return { ok: false, error: 'Keranjang kosong.' };
+    for (const x of cart.items) {
+      if (!x.product || x.maxQty < x.item.qty) return { ok: false, error: `Stok "${x.product?.name}${x.variant ? ` (${x.variant.label})` : ''}" tidak mencukupi.` };
     }
-    const orderItems: OrderItem[] = items.map((x) => ({
-      kind: 'product' as const, refId: x.product!.id, title: x.product!.name,
-      price: x.product!.discountPrice > 0 && x.product!.discountPrice < x.product!.price ? x.product!.discountPrice : x.product!.price,
-      qty: x.item.qty, instructorId: null, thumbnail: x.product!.thumbnail,
+    let discount = 0;
+    let voucherCode: string | null = null;
+    if (opts.voucherCode?.trim()) {
+      const res = VoucherService.validate(opts.voucherCode, cart.subtotal);
+      if (!res.ok) return { ok: false, error: res.error };
+      discount = res.discount;
+      voucherCode = res.voucher!.code;
+    }
+    const needsShipping = cart.hasPhysical;
+    if (needsShipping && (!opts.shipping?.name.trim() || !opts.shipping?.address.trim() || !opts.shipping?.phone.trim())) {
+      return { ok: false, error: 'Alamat pengiriman wajib diisi untuk produk fisik.' };
+    }
+    const orderItems: OrderItem[] = cart.items.map((x) => ({
+      kind: 'product' as const, refId: x.product!.id,
+      title: x.variant ? `${x.product!.name} — ${x.variant.label}` : x.product!.name,
+      price: x.price, qty: x.item.qty, instructorId: null, thumbnail: x.product!.thumbnail,
+      variantId: x.item.variantId, variantLabel: x.variant?.label ?? null, isDigital: x.product!.isDigital,
     }));
-    const order = OrderService.createShopOrder(user, orderItems);
+    const order = OrderService.createShopOrder(user, orderItems, {
+      discountAmount: discount, voucherCode, needsShipping,
+      shippingName: needsShipping ? opts.shipping!.name.trim() : undefined,
+      shippingAddress: needsShipping ? opts.shipping!.address.trim() : undefined,
+      shippingPhone: needsShipping ? opts.shipping!.phone.trim() : undefined,
+    });
     ShopService.clear(user);
     return { ok: true, order, error: undefined };
   },

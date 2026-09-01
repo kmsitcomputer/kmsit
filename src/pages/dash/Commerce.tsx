@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db, type Order, type Payment, type Withdrawal, type ID } from '../../lib/db';
 import { fmtMoney, fmtDateTime, fmtDate, maskKey } from '../../lib/services';
-import { OrderService, PaymentService, WalletService, WithdrawalService, MIN_WITHDRAWAL, activeGateway, gatewayMode, GATEWAYS } from '../../lib/commerce';
+import { OrderService, PaymentService, WalletService, WithdrawalService, DeliveryService, MIN_WITHDRAWAL, activeGateway, gatewayMode, GATEWAYS } from '../../lib/commerce';
 import { useApp, useDB } from '../../state/store';
 import { Icon } from '../../components/icons';
 import { Avatar, Badge, Confirm, DataTable, EmptyState, Field, IconButton, Modal, PageHeader, Select, StatCard, StatusBadge, Tabs, TextArea, TextInput } from '../../components/ui';
@@ -28,11 +28,25 @@ function OrderDetail({ order, onClose }: { order: Order; onClose: () => void }) 
           <span className="font-display text-sm font-bold">{fmtMoney(it.price * it.qty)}</span>
         </div>
       ))}
-      <div className="mt-3 flex justify-end gap-6 text-sm">
+      <div className="mt-3 flex flex-wrap justify-end gap-x-6 gap-y-1 text-sm">
         <span className="text-base-500">Subtotal <b className="font-mono text-base-800 dark:text-base-100">{fmtMoney(order.subtotal)}</b></span>
+        {order.discountAmount > 0 && <span className="text-ok-500">Voucher {order.voucherCode} <b className="font-mono">−{fmtMoney(order.discountAmount)}</b></span>}
         <span className="text-base-500">Gateway <b className="font-mono text-base-800 dark:text-base-100">{fmtMoney(order.gatewayFee)}</b></span>
         <span className="text-base-500">Total <b className="font-display text-base-900 dark:text-base-50">{fmtMoney(order.total)}</b></span>
       </div>
+      {order.type === 'shop' && (
+        order.needsShipping ? (
+          <div className="mt-4 rounded-lg bg-base-100 dark:bg-base-850 p-3.5">
+            <p className="label !mb-1">Pengiriman (produk fisik)</p>
+            <p className="text-sm font-bold text-base-800 dark:text-base-100">{order.shippingName} · {order.shippingPhone}</p>
+            <p className="text-xs leading-5 text-base-500">{order.shippingAddress}</p>
+          </div>
+        ) : (
+          <p className="mt-4 flex items-center gap-2 rounded-lg bg-brand-500/[0.07] border border-brand-500/25 px-3.5 py-2.5 text-xs font-semibold text-brand-700 dark:text-brand-300">
+            <Icon name="download" size={14} /> Order digital — file dikirim otomatis ke pembeli, tanpa pengiriman barang.
+          </p>
+        )
+      )}
       <p className="label mt-5">Riwayat Pembayaran</p>
       {payments.length === 0 ? <p className="text-sm text-base-400">Belum ada pembayaran diinisiasi.</p> : payments.map((p) => (
         <div key={p.id} className="mb-2 rounded-lg border border-base-200 dark:border-base-700 p-3">
@@ -228,6 +242,63 @@ export function WalletPage() {
         </div>
       </div>
       {withdraw && <WithdrawModal onClose={() => setWithdraw(false)} />}
+    </DashShell>
+  );
+}
+
+/* ================= my digital products ================= */
+
+export function MyDigitalPage() {
+  useDB();
+  const { user, toast } = useApp();
+  if (!user) return null;
+  const deliveries = DeliveryService.ofUser(user.id);
+  return (
+    <DashShell title="Produk Digital">
+      <PageHeader title="Produk Digital Saya" sub="File & license key dikirim otomatis setelah pembayaran berhasil — tanpa pengiriman barang." />
+      {deliveries.length === 0 ? (
+        <EmptyState icon="download" title="Belum ada produk digital" sub="Produk digital yang kamu beli akan tersedia di sini untuk diunduh kapan saja."
+          action={<Link to="/shop" className="btn-primary"><Icon name="store" size={14} /> Jelajahi Toko</Link>} />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {deliveries.map((d, i) => {
+            const product = db.byId('products', d.productId);
+            return (
+              <div key={d.id} className="card card-hover p-5 anim-rise" style={{ animationDelay: `${(i % 2) * 60}ms` }}>
+                <div className="flex gap-4">
+                  {product?.thumbnail ? <img src={product.thumbnail} alt="" className="h-20 w-20 rounded-xl object-cover" /> : (
+                    <span className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl bg-accent-400/12 text-accent-500"><Icon name="download" size={26} /></span>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <h3 className="truncate font-display text-sm font-bold text-base-900 dark:text-base-50">{product?.name ?? 'Produk dihapus'}</h3>
+                      <Badge tone="accent">Digital</Badge>
+                    </div>
+                    <p className="mt-1 font-mono text-[10px] text-base-400">dibeli {fmtDateTime(d.createdAt)} · {d.downloads}x diunduh</p>
+                    <div className="mt-2 flex items-center gap-2 rounded-lg bg-base-100 dark:bg-base-850 px-3 py-2">
+                      <Icon name="key" size={13} className="shrink-0 text-brand-500" />
+                      <span className="flex-1 truncate font-mono text-xs font-bold text-base-800 dark:text-base-100">{d.licenseKey}</span>
+                      <button className="text-base-400 hover:text-brand-500 cursor-pointer" title="Salin license" onClick={async () => {
+                        try { await navigator.clipboard.writeText(d.licenseKey); toast('success', 'License key disalin.'); } catch { toast('error', 'Gagal menyalin.'); }
+                      }}><Icon name="copy" size={13} /></button>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  {d.downloadUrl ? (
+                    <a href={d.downloadUrl} download target={d.downloadUrl.startsWith('data:') ? undefined : '_blank'} rel="noopener noreferrer"
+                      className="btn-primary btn-sm flex-1" onClick={() => DeliveryService.markDownloaded(d.id)}>
+                      <Icon name="download" size={13} /> Unduh File
+                    </a>
+                  ) : (
+                    <span className="btn-ghost btn-sm flex-1 !text-base-400 pointer-events-none"><Icon name="alert-circle" size={13} /> File belum diunggah penjual</span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </DashShell>
   );
 }
