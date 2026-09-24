@@ -1,7 +1,7 @@
 # KMSIT Computer — System Blueprint
 
 **Cetak biru arsitektur teknis platform KMSIT Computer**
-Disusun: 08 September 2026 · Diperbarui: 22 September 2026 · Peran: IT Analyst · Architect · Project Manager
+Disusun: 08 September 2026 · Diperbarui: 24 September 2026 · Peran: IT Analyst · Architect · Project Manager
 Repo: `c:\ServBay\www\kms` · Model deploy: Monolith Laravel (backend) + React SPA (frontend), satu proses
 
 ---
@@ -35,10 +35,10 @@ Repo: `c:\ServBay\www\kms` · Model deploy: Monolith Laravel (backend) + React S
 | Controller API | 30 |
 | Route SPA | ~46 |
 | Payment gateway | 3 (Tripay, Xendit, Stripe) |
-| Test backend (PHPUnit) | 19 |
-| Migration custom | 18 |
+| Test backend (PHPUnit) | 214 (42 file) |
+| Migration custom | 27 |
 
-Karakter arsitektur yang paling menentukan: **ID non-auto-increment 12 karakter** di hampir semua tabel utama (bukan bigint biasa), **autentikasi berbasis session-cookie** (bukan token bearer meski paket Sanctum ter-install), **RBAC berbasis kolom `permissions` JSON per-role** yang dicek manual di tiap controller, dan **installer wizard bawaan** (`/install`) yang menulis `.env` dan menjalankan migrasi tanpa akses SSH — dirancang agar bisa naik ke shared hosting oleh non-developer.
+Karakter arsitektur yang paling menentukan: **ID non-auto-increment 12 karakter** di hampir semua tabel utama (bukan bigint biasa), **autentikasi berbasis session-cookie** (token bearer Sanctum tersedia sebagai fallback), **RBAC berbasis kolom `permissions` JSON per-role** yang ditegakkan di server lewat helper `AdminAccess`/`InstructorAccess` + `UserPolicy`, dan **installer wizard bawaan** (`/install`) yang menulis `.env` dan menjalankan migrasi tanpa akses SSH — dirancang agar bisa naik ke shared hosting oleh non-developer.
 
 > ✓ Selama audit ini, lima bug produksi nyata ditemukan & diperbaiki langsung di kode: validasi partial-update yang menghapus data (avatar hilang saat simpan profil, produk gagal publish), allowlist `settings/public` yang tidak lengkap (footer tidak menarik data dashboard), serta mismatch kolom pada CMS content (500 error saat membuat berita/tutorial). Semua tercakup regression test baru.
 
@@ -53,10 +53,10 @@ flowchart LR
   subgraph client["Browser"]
     spa["React 18 SPA<br/>HashRouter + Vite build"]
   end
-  subgraph server["Laravel 13 Monolith (PHP 8.4)"]
+  subgraph server["Laravel 13 Monolith (PHP 8.3+)"]
     web["web.php<br/>serve app.html + /storage fallback"]
     api["routes/api.php<br/>/api/v1/* REST"]
-    mw["AuthenticateApiUser<br/>PreventMaintenanceAccess"]
+    mw["AuthenticateApiUser + VerifyCsrfTokenForSession<br/>ValidateAuthEpoch + PreventMaintenanceAccess"]
     pgw["PaymentGatewayManager"]
   end
   db[("MySQL<br/>kmsit_computer")]
@@ -93,7 +93,7 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 
 | Kategori | Detail |
 |---|---|
-| **Backend** | Laravel 13 · PHP 8.4 · MySQL · Sanctum 4 (session-cookie aktif) · PHPUnit · Laravel Pint |
+| **Backend** | Laravel 13 · PHP 8.3+ · MySQL · Sanctum 4 (session-cookie utama, bearer fallback) · PHPUnit · Laravel Pint |
 | **Frontend** | React 18 · TypeScript 5.x (strict) · Vite 6.x · Tailwind 4 (CSS-first `@theme`, tanpa `tailwind.config.js`) · React Router DOM 6 |
 | **Editor & UI kit** | Tiptap (rich text CMS) · @dnd-kit (drag-drop homepage builder & kurikulum) · recharts + SVG chart custom · react-qr-code (sertifikat) · canvas-confetti |
 | **Tipografi produk** | Display `Space Grotesk` · Body `Manrope` · Mono `JetBrains Mono` |
@@ -112,10 +112,10 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 | Tabel | Fungsi | Kolom / relasi kunci |
 |---|---|---|
 | **roles** | Definisi peran & hak akses | `role_key` (unik) · `name` · `permissions:json` |
-| **users** | Akun semua peran (student/instructor/admin/super_admin) | `role_key`→roles · `email` (unik) · `password_hash` · `status:active\|suspended` · `instructor_approved` |
+| **users** | Akun semua peran (student/instructor/admin/super_admin) | `role_key`→roles · `email` (unik) · `password_hash` · `status:active\|suspended` · `instructor_approved` · `auth_epoch` (revocation sesi) |
 | password_reset_tokens | Token reset password | `email` PK · `token` · `created_at` |
-| sessions | Session store (driver `database`) | `user_id` · `ip_address` · `payload` · `last_activity` |
-| personal_access_tokens | Tabel Sanctum (terpasang, guard token bearer tidak aktif dipakai) | `tokenable` morph · `abilities` · `expires_at` |
+| sessions | Session store (driver `database`) | `user_id` string(12)→users (FK nullOnDelete) · `ip_address` · `payload` · `last_activity` |
+| personal_access_tokens | Tabel Sanctum; guard `sanctum` aktif (bearer sebagai fallback) | `tokenable` morph · `abilities` · `expires_at` |
 
 ### Pembelajaran (LMS)
 `categories` · `courses` · `course_sections` · `lessons` · `enrollments` · `lesson_progress`
@@ -144,7 +144,7 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 
 | Tabel | Fungsi | Kolom / relasi kunci |
 |---|---|---|
-| **orders** | Order kelas atau toko | `type:course\|shop` · `status:pending\|paid\|failed\|expired` · `subtotal/discount/gateway_fee/total` · `needs_shipping` |
+| **orders** | Order kelas atau toko | `type:course\|shop` · `status:pending\|paid\|failed\|expired\|cancelled` · `subtotal/discount/gateway_fee/total` · `needs_shipping` · `expires_at` (TTL) · `stock_reservation_status` · `voucher_id`/`voucher_reservation_status`/`voucher_reserved_until` |
 | order_items | Item per order (course/product), snapshot harga saat itu | `kind` · `ref_id` · `price` · `qty` · `is_digital` |
 | payments | Transaksi gateway per order | `gateway:tripay\|xendit\|stripe` · `reference` (unik) · `status` · `events:json` |
 | webhook_logs | Dedupe & audit callback gateway | `payload_hash` (unik) · `result:processed\|duplicate\|invalid` |
@@ -156,7 +156,7 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 |---|---|---|
 | products | Produk fisik/digital | `is_digital:bool` · `stock` · `status` · soft delete |
 | product_variants | Varian (ukuran/warna/lisensi) | unique(product_id,label) · `price` · `stock` |
-| vouchers | Kode diskon | `type:percent\|fixed` · `usage_limit/used_count` · `expires_at` |
+| vouchers | Kode diskon + reservasi kuota | `type:percent\|fixed` · `usage_limit/used_count` · `expires_at` · pemakaian tercatat lewat `orders.voucher_reservation_status` (reserved→consumed/released) |
 | cart_items | Keranjang aktif per user | unique(user_id,product_id,variant_id) |
 
 ### Fulfillment & Finansial Instruktur
@@ -196,7 +196,7 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 |---|---|---|
 | certificate_templates | Template visual sertifikat | `theme:navy\|ivory\|graphite` · `accent` (hex) · `frame:modern\|classic` |
 | certificates | Sertifikat terbit, dapat diverifikasi publik via nomor + QR | `number` (unik) · unique(user_id,course_id) · `status:issued\|revoked` |
-| notifications | Notifikasi in-app per user | `kind:info\|success\|warning\|danger` · `is_read` |
+| notifications | Notifikasi in-app per user (idempotent) | `kind:info\|success\|warning\|danger` · `is_read` · `event_key` + unique(`user_id`,`event_key`) |
 | audit_logs | Jejak audit aksi admin (satu-satunya tabel bigint PK) | `action` · `model` · `model_id` · `ip` · `ua` |
 | contact_messages | Pesan dari form kontak publik | `is_read` |
 
@@ -204,7 +204,7 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 
 ## 4. Peta API Backend
 
-Semua route berprefiks `/api/v1`. Autentikasi ditegakkan oleh middleware kustom `AuthenticateApiUser` (bukan middleware bawaan Sanctum), dipasang per-grup route — bukan lewat Policy/Gate terpusat.
+Semua route berprefiks `/api/v1`. Autentikasi ditegakkan middleware kustom `AuthenticateApiUser` (bearer Sanctum → session `web`), ditambah `VerifyCsrfTokenForSession`, `ValidateAuthEpoch`, dan `PreventMaintenanceAccess` per-grup. Otorisasi memakai helper bersama `AdminAccess`/`InstructorAccess` + `UserPolicy`. Semua listing memakai standar pagination `page`+`per_page` (maks 100/halaman).
 
 ### Auth & Profil (9 endpoint)
 
@@ -264,7 +264,8 @@ Semua route berprefiks `/api/v1`. Autentikasi ditegakkan oleh middleware kustom 
 | POST | `/orders/course` | OrderController@storeCourse | |
 | POST | `/orders/shop` | OrderController@storeShop | |
 | GET | `/orders[/{id}]` | OrderController@index/show | |
-| POST | `/orders/{id}/payment` | OrderController@initiatePayment | throttle 10/menit → PaymentGatewayManager |
+| POST | `/orders/{id}/payment` | OrderController@initiatePayment | throttle 10/menit → gateway dipilih server-side |
+| POST | `/orders/{id}/cancel` | OrderController@cancel | 422 jika sudah dibayar |
 | GET | `/payments` | OrderController@payments | |
 | GET | `/payments/webhook-logs` | OrderController@webhookLogs | admin |
 | POST | `/payments/webhook/{gateway}` | OrderController@webhook | publik, throttle 120/menit, verifikasi signature |
@@ -300,6 +301,25 @@ Semua route berprefiks `/api/v1`. Autentikasi ditegakkan oleh middleware kustom 
 | GET | `/settings/public` | SettingsController@public | publik, allowlist eksplisit |
 | GET/PUT | `/settings, /settings/bulk, /settings/payment` | SettingsController | secret key gateway diblok dari API |
 
+### Instructor (6 endpoint, ownership-scoped)
+
+| Method | Path | Controller | Catatan |
+|---|---|---|---|
+| GET | `/instructor/students` | InstructorController@students | filter course_id/q; hanya kelas miliknya |
+| GET | `/instructor/sales` | InstructorController@sales | penjualan kelas sendiri (bukan pembelian sendiri) |
+| GET | `/instructor/earnings` | InstructorController@earnings | ledger earning sendiri |
+| GET | `/instructor/quizzes` | InstructorController@quizzes | kuis pada kelas miliknya |
+| GET/POST | `/instructor/quiz-attempts` | InstructorController@quizAttempts | hasil kuis miliknya (POST = alias legacy) |
+| GET | `/instructor/courses/{id}/progress` | InstructorController@courseProgress | 404 jika bukan kelasnya |
+
+### Siswa (learner)
+
+| Method | Path | Controller | Catatan |
+|---|---|---|---|
+| GET | `/my/enrollments` | LearningController@enrollments | milik user |
+| GET | `/my/quiz-attempts` | LearningController@quizAttempts | milik user |
+| GET | `/my/courses/{id}/status` | LearningController@status | status belajar user |
+
 ### Admin, Notifikasi, Search & Install (±15 endpoint)
 
 | Method | Path | Controller | Catatan |
@@ -310,6 +330,7 @@ Semua route berprefiks `/api/v1`. Autentikasi ditegakkan oleh middleware kustom 
 | PUT | `/notifications/{id}/read` | NotificationController@read | |
 | POST | `/notifications/read-all` | NotificationController@readAll | |
 | PATCH | `/contact-messages/{id}` | ContactController@update | |
+| GET | `/admin/ops/status` | OperationsController@status | super_admin; queue/scheduler/integrasi |
 | GET | `/search?q=` | SearchController | publik, throttle 60/menit, lintas entitas |
 | POST | `/contact` | ContactController@store | publik, throttle 5/menit |
 | GET/POST | `/install/*` | InstallController | publik, status/requirements/test-db/configure/install |
@@ -324,7 +345,8 @@ SPA React dengan `HashRouter`, state global via Context, dan lapisan API tipis (
 ### Pola struktural
 
 - **State** — `state/store.tsx`: satu `AppProvider` berisi user, tema (light/dark/system), bahasa (id/en), toast queue. Sesi login sepenuhnya server-driven lewat cookie, **bukan** localStorage.
-- **Lapisan API** — `lib/api.ts`: >90 fungsi bertipe, dikelompokkan per domain (auth, courses, quizzes, shop, wallet, cms, settings, admin). Setiap mutasi state-changing memakai CSRF cookie Sanctum.
+- **Navigasi & guard** — `lib/menu.ts`: satu sumber kebenaran untuk item sidebar **dan** route guard (`visibleMenu`/`canAccessRoute`) memakai `can()` dari `lib/permissions.ts`; backend tetap mengotorisasi tiap request.
+- **Lapisan API** — `lib/api.ts`: >90 fungsi bertipe, dikelompokkan per domain (auth, courses, quizzes, shop, wallet, cms, settings, admin). Setiap mutasi state-changing memakai CSRF cookie Sanctum (`X-XSRF-TOKEN`).
 - **Komponen inti** — `Shell.tsx` (header/sidebar/footer publik & dashboard), `ui.tsx` (design-system: Modal, DataTable, BarChart SVG custom, dsb.), `icons.tsx` (±80 ikon SVG buatan sendiri + palet warna `iconTone`).
 - **Theming** — `lib/theme.ts` + `ThemeVars.tsx`: sistem `SurfaceTheme`/`BlockTokens` per blok, disimpan sebagai JSON di `settings.theme_website` / `theme_dashboard`, di-inject sebagai CSS var oleh `ThemeVarsInjector`. Editor tema visual tersedia di `/dashboard/settings-theme`.
 - **Halaman editor** — `RichText.tsx` (Tiptap WYSIWYG untuk CMS), `Crud.tsx` (tabel CRUD universal), `Commerce.tsx` (halaman komersial dashboard).
@@ -352,7 +374,7 @@ SPA React dengan `HashRouter`, state global via Context, dan lapisan API tipis (
 |---|---|---|
 | `/dashboard` | Overview | login saja |
 | `/dashboard/profile` | ProfilePage | login saja |
-| `/dashboard/my-learning` | Redirect ke `/dashboard` | login saja |
+| `/dashboard/my-learning` | LearnerPage (kelas saya) | login saja |
 | `/dashboard/courses` | CoursesAdmin | manage_courses \| instructor_courses |
 | `/dashboard/categories` | CategoriesPage | manage_categories |
 | `/dashboard/quizzes` | QuizzesAdmin | manage_quizzes \| instructor_quizzes |
@@ -367,6 +389,7 @@ SPA React dengan `HashRouter`, state global via Context, dan lapisan API tipis (
 | `/dashboard/products, /vouchers` | ContentModule, VouchersPage | manage_shop, manage_vouchers |
 | `/dashboard/digital` | MyDigitalPage | login saja |
 | `/dashboard/homepage, /menus, /about` | HomepageBuilder, MenusPage, AboutEditor | manage_homepage, manage_menus, manage_about |
+| `/dashboard/operations` | OperationsPanel (queue/scheduler/integrasi) | * (super admin) |
 | `/dashboard/settings*` | SettingsGeneral/Theme/Payments/Language/System | * (super admin) |
 
 ---
@@ -382,7 +405,10 @@ SPA React dengan `HashRouter`, state global via Context, dan lapisan API tipis (
 - **📰 CMS Konten** — 5 tipe konten (artikel/berita/tutorial/aktivitas/halaman) dengan editor Tiptap WYSIWYG, SEO fields, status draft/published, soft-delete.
 - **🏗️ Homepage & Menu Builder** — Blok homepage drag-and-drop (@dnd-kit), menu header/footer bertingkat, editor tema visual per-blok (warna/opacity) untuk website & dashboard terpisah.
 - **🔐 Admin & RBAC** — 4 peran (super_admin/admin/instructor/student), permission array per-role di kolom JSON, approval instructor manual, audit log setiap aksi sensitif.
-- **🔔 Notifikasi & Pesan** — Notifikasi in-app per user (bukan lewat sistem Notification Laravel — tulis langsung ke tabel), inbox pesan form kontak publik, mark-read individual & batch.
+- **🔔 Notifikasi & Pesan** — `NotificationService` menulis notifikasi in-app langsung ke tabel dengan `event_key` unik (idempotent, ikut transaksi bisnis sehingga rollback membatalkan notifikasi), penerima staf mengikuti permission; inbox pesan form kontak publik, mark-read individual & batch.
+- **🧑🏫 Dashboard Instructor** — siswa, penjualan, earnings, kuis, hasil kuis, dan progres per kelas; seluruh query ter-scope ke kelas milik instructor (kelas orang lain → 404).
+- **🎒 Area Siswa** — `/my/enrollments`, `/my/quiz-attempts`, `/my/courses/{id}/status`.
+- **🖥️ Panel Operasional (Super Admin)** — status queue, failed jobs, heartbeat scheduler, backup terakhir, dan status integrasi (yang belum aktif ditandai "Belum aktif").
 - **⚙️ Pengaturan Situs** — Settings umum, embed YouTube (implemented), konfigurasi Zoom/Google Meet (configuration-only, belum ada integrasi runtime), tema visual (website & dashboard), bahasa, mode maintenance, backup export, viewer audit log. Lihat `docs/integrations-status.md`.
 - **🧙 Installer Wizard** — Alur `/install` tanpa SSH: cek requirement → test koneksi DB → tulis `.env` → migrate+seed → buat akun admin pertama.
 
@@ -392,11 +418,11 @@ SPA React dengan `HashRouter`, state global via Context, dan lapisan API tipis (
 
 ### Autentikasi
 
-Login memakai **session-cookie Laravel standar** (guard `web`), diperkuat CSRF via endpoint `/sanctum/csrf-cookie` yang men-set cookie `XSRF-TOKEN` — frontend menempelkannya sebagai header `X-XSRF-TOKEN` pada tiap mutasi. Middleware kustom `AuthenticateApiUser` mencoba guard `sanctum` lalu `web`; karena `config/auth.php` hanya mendefinisikan guard `web`, jalur token bearer Sanctum (`personal_access_tokens`, trait `HasApiTokens`) **tidak benar-benar aktif** — lihat §10.
+Login memakai **session-cookie Laravel standar** (guard `web`), diperkuat CSRF: endpoint `/sanctum/csrf-cookie` men-set cookie `XSRF-TOKEN`, frontend menempelkannya sebagai `X-XSRF-TOKEN`, dan middleware `VerifyCsrfTokenForSession` mewajibkannya pada setiap mutasi terautentikasi cookie (request Bearer dikecualikan). Middleware kustom `AuthenticateApiUser` mencoba guard `sanctum` (Bearer) lalu `web` (session). Guard `sanctum` **aktif** karena didaftarkan otomatis oleh `SanctumServiceProvider`; `config/auth.php` sendiri hanya mendefinisikan guard `web`. Sesi lama dibatalkan `ValidateAuthEpoch` (`users.auth_epoch`).
 
 ### Otorisasi (RBAC)
 
-4 peran dengan daftar permission tersimpan sebagai JSON di `roles.permissions`. Pemeriksaan akses dilakukan **inline per-controller** (mis. `abort_unless(in_array($user->role_key, [...]))`) — bukan lewat Laravel Policy/Gate terpusat. Di frontend, gate serupa direplikasi lewat komponen `Guard` + fungsi `can(user, perm)`.
+4 peran dengan daftar permission tersimpan sebagai JSON di `roles.permissions`. Pemeriksaan akses memakai helper bersama `AdminAccess`/`InstructorAccess` (super_admin wildcard) + `UserPolicy` untuk manajemen user; tiap endpoint tetap memvalidasi permission/ownership di server. Di frontend, visibilitas menu & route guard terpusat di `lib/menu.ts` (memakai `can(user, perm)` dari `lib/permissions.ts`) dan sifatnya hanya UI.
 
 ### Rate limiting kunci
 
@@ -414,7 +440,9 @@ Login memakai **session-cookie Laravel standar** (guard `web`), diperkuat CSRF v
 
 ### Pertahanan lain
 
-- **Maintenance mode** (`PreventMaintenanceAccess`, global middleware): mengunci seluruh situs kecuali admin/super_admin dan endpoint auth+settings publik; *fail-open* jika tabel settings belum tersedia (fresh install) agar tidak mengunci diri sendiri.
+- **CSRF** (`VerifyCsrfTokenForSession`): mutasi terautentikasi cookie wajib menyertakan `X-CSRF-TOKEN`/`X-XSRF-TOKEN`; request Bearer dikecualikan.
+- **Revocation sesi** (`ValidateAuthEpoch` + `users.auth_epoch`): sesi lama otomatis 401 setelah ganti password/suspend.
+- **Maintenance mode** (`PreventMaintenanceAccess`, global + per-grup): mengunci seluruh situs kecuali admin/super_admin (termasuk sesi cookie) dan endpoint auth+settings publik; *fail-open* jika tabel settings belum tersedia (fresh install) agar tidak mengunci diri sendiri.
 - **Path sensitif diblok 404** secara eksplisit di `web.php`: `/.env`, `/composer.json`, `/package.json`, `/database/*`, `/backend/*`.
 - **Kredensial gateway pembayaran** (private/secret key) diblok dari endpoint `PUT /settings*` — hanya bisa diubah lewat environment server, tidak lewat API meski oleh admin.
 - **Fallback penyajian file** `/storage/{path}` lewat `MediaController@serve` untuk hosting yang tidak mendukung `symlink()`.
@@ -434,7 +462,7 @@ sequenceDiagram
   participant GW as Gateway (Tripay/Xendit/Stripe)
   U->>FE: Checkout
   FE->>API: POST /orders/{id}/payment
-  API->>PGM: initiate(order, gateway, method)
+  API->>PGM: createPayment(order, method)  (gateway dipilih server-side)
   PGM->>GW: create transaction
   GW-->>PGM: redirect_url / QR / va_number
   PGM-->>API: payment record (status pending)
@@ -444,7 +472,7 @@ sequenceDiagram
   API->>API: fulfillOrder() → enroll / stok / wallet / delivery
 ```
 
-Admin memilih gateway aktif & mode (sandbox/live) lewat Settings → Pembayaran, disimpan di tabel `settings` (`gateway_active`, `gateway_mode`) — kredensial rahasianya tetap dari `.env` / `config/payment.php`, tidak pernah tersimpan di database maupun bisa diubah lewat API biasa.
+Admin memilih gateway aktif & mode (sandbox/live) lewat Settings → Pembayaran, disimpan di tabel `settings` (`gateway_active`, `gateway_mode`). Inisiasi memilih provider **di server** dari setting tersebut (fallback env `PAYMENT_GATEWAY`/`PAYMENT_MODE`); payload `gateway` dari client **diabaikan**, dan nilai setting yang tidak valid menghasilkan error aman (503). Kredensial rahasia tetap dari `.env` / `config/payment.php` dan tidak pernah tersimpan di database. Status per gateway: `docs/integrations-status.md`.
 
 ---
 
@@ -471,12 +499,12 @@ Admin memilih gateway aktif & mode (sandbox/live) lewat Settings → Pembayaran,
 
 Ditemukan langsung dari audit kode — bukan asumsi. Diurutkan berdasarkan dampak.
 
-1. **[Kritis] Guard Sanctum tidak benar-benar aktif** — `config/sanctum.php` tidak ada dan `config/auth.php` cuma mendefinisikan guard `web` — trait `HasApiTokens` dan tabel `personal_access_tokens` terpasang tapi jalur token bearer tidak benar-benar bisa dipakai untuk auth API eksternal (mobile app / integrasi pihak ketiga di masa depan akan gagal diam-diam).
-2. **Kode legacy client-side menduplikasi logika bisnis** — `lib/lms.ts` & `lib/commerce.ts` berisi ulang logika scoring kuis, kalkulasi fee wallet, dan validasi voucher yang *juga* ada di backend — kini hanya dipakai jalur seed installer, tapi berisiko membingungkan developer baru yang mengira ini sumber kebenaran runtime.
+1. **[Terverifikasi] Guard Sanctum aktif lewat paket** — `SanctumServiceProvider::register()` mendaftarkan `auth.guards.sanctum` otomatis, sehingga token bearer berfungsi (dipakai test `createToken`/`withToken`). `config/auth.php` hanya mendefinisikan guard `web` — konsisten, karena `sanctum` adalah guard paket. Keputusan tersisa: apakah bearer akan diekspos untuk integrasi eksternal atau hanya fallback internal.
+2. **[Selesai] Modul localStorage legacy dihapus** — `lib/db.ts`, `lib/lms.ts`, `lib/commerce.ts`, dan `lib/services.ts` sudah dihapus; frontend kini server-driven (`lib/settings.ts` in-memory, preferensi tema/bahasa di cookie).
 3. **Mail & job berjalan sinkron secara default** — `QUEUE_CONNECTION=sync` membuat `PasswordResetMail` (meski `ShouldQueue`) terkirim inline dalam request — request lambat menunggu SMTP, dan gagal total jika proses PHP mati di tengah kirim.
 4. **Bundle JS tunggal ±1 MB tanpa code-splitting** — Seluruh kode dashboard admin ikut terkirim ke pengunjung publik yang hanya membuka homepage — belum ada `dynamic import()` per-route.
-5. **Cakupan test frontend nol** — Backend punya 19 test PHPUnit; frontend tidak punya test runner sama sekali — logika kritikal (kalkulasi keranjang, scoring kuis di UI, alur checkout) tidak diverifikasi otomatis.
-6. **Pemeriksaan RBAC tersebar, bukan terpusat** — Setiap controller memeriksa `role_key`/permission secara manual — mudah lupa menambahkan guard saat endpoint baru dibuat; belum ada Policy/Gate Laravel sebagai satu sumber kebenaran.
+5. **Test frontend masih statis** — Backend punya 214 test PHPUnit; frontend punya `scripts/verify-dashboard.mjs` (14 static check: menu/route/i18n/pagination) tetapi belum ada test runner unit (Vitest) untuk logika kalkulasi/checkout.
+6. **RBAC makin terpusat tapi belum sepenuhnya** — sudah ada `AdminAccess`/`InstructorAccess` + `UserPolicy`, namun sebagian controller masih memeriksa `role_key` manual; lanjutkan migrasi ke Policy/Gate sebagai satu sumber kebenaran.
 7. **Dependency tak terpakai** — `lucide-react` (ikon dibuat manual di `icons.tsx`) dan `@supabase/supabase-js` tercantum di `package.json` tapi tidak dirujuk kode manapun.
 
 ---
@@ -485,14 +513,14 @@ Ditemukan langsung dari audit kode — bukan asumsi. Diurutkan berdasarkan dampa
 
 **P0 — sebelum push produksi berikutnya**
 
-- Tentukan sikap terhadap Sanctum token auth: konfigurasi `config/sanctum.php` + guard `api` dengan benar bila token bearer akan dipakai, atau lepas trait/tabel yang tidak dipakai.
+- **[Selesai]** Guard Sanctum ternyata aktif (didaftarkan paket). Sisa keputusan: ekspos bearer untuk integrasi eksternal, atau pertahankan sebagai fallback internal saja.
 - Pasang worker queue produksi: `QUEUE_CONNECTION=database` + `php artisan queue:work` (via Supervisor).
 
 **P1 — pengerasan jangka pendek**
 
-- Sentralisasi RBAC lewat Laravel Policy/Gate.
+- **[Sebagian]** Lanjutkan sentralisasi RBAC ke Policy/Gate penuh (`AdminAccess`/`InstructorAccess` + `UserPolicy` sudah ada).
 - Code-split bundle dashboard vs publik lewat `React.lazy` per-route.
-- Karantina/hapus `lib/lms.ts` & `lib/commerce.ts`, sisakan hanya yang dipakai seeding installer.
+- **[Selesai]** `lib/lms.ts`, `lib/commerce.ts`, `lib/db.ts`, `lib/services.ts` sudah dihapus.
 
 **P2 — kualitas & skala**
 
@@ -501,4 +529,4 @@ Ditemukan langsung dari audit kode — bukan asumsi. Diurutkan berdasarkan dampa
 
 ---
 
-*KMSIT Computer — System Blueprint v1.0 · Disusun 08 September 2026, diperbarui 22 September 2026 dari audit kode langsung*
+*KMSIT Computer — System Blueprint v1.1 · Disusun 08 September 2026, diperbarui 24 September 2026 dari audit kode langsung*

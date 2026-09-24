@@ -1,7 +1,7 @@
 # KMSIT Computer — System Architecture
 
 **Dokumentasi arsitektur sistem lengkap**
-Dibuat: 22 September 2026 · Platform: LMS + CMS + E-commerce
+Dibuat: 22 September 2026 · Diperbarui: 24 September 2026 · Platform: LMS + CMS + E-commerce
 
 ---
 
@@ -38,7 +38,7 @@ KMSIT Computer adalah platform **tiga-dalam-satu**: Learning Management System (
 
 | Layer | Technology |
 |---|---|
-| **Language** | PHP 8.4 / JavaScript (TypeScript) |
+| **Language** | PHP 8.3+ / JavaScript (TypeScript) |
 | **Backend Framework** | Laravel 13 (PHP) |
 | **Frontend Framework** | React 18 (TypeScript) |
 | **Build Tool** | Vite 6 |
@@ -173,18 +173,30 @@ backend/
 │   │   │   ├── ProfileController      # profile update, avatar
 │   │   │   ├── InstallController      # installation wizard
 │   │   │   ├── PasswordResetController # forgot/reset password
-│   │   │   ├── DashboardController    # dashboard summary stats
+│   │   │   ├── DashboardController    # dashboard summary stats (per role)
+│   │   │   ├── InstructorController   # owned students/sales/earnings/quizzes/progress
+│   │   │   ├── LearningController     # learner /my/* endpoints
+│   │   │   ├── OperationsController   # super-admin operations status
 │   │   │   ├── UserController         # user CRUD, approve instructor
 │   │   │   └── VoucherController      # voucher management
 │   │   ├── Middleware/
-│   │   │   ├── AuthenticateApiUser    # custom auth (session + CSRF)
-│   │   │   └── PreventMaintenanceAccess # maintenance mode gate
+│   │   │   ├── AuthenticateApiUser    # auth: sanctum bearer → web session
+│   │   │   ├── VerifyCsrfTokenForSession # CSRF for cookie-auth mutations
+│   │   │   ├── ValidateAuthEpoch      # invalidate stale sessions (auth_epoch)
+│   │   │   └── PreventMaintenanceAccess # maintenance gate (admin bypass)
 │   ├── Models/                        # 39 Eloquent models
+│   ├── Policies/                      # UserPolicy (user authorization)
 │   ├── Services/                      # Business logic services
 │   │   ├── PaymentGatewayManager.php  # Gateway selection dispatcher
 │   │   ├── StripeGateway.php          # Stripe implementation
 │   │   ├── TripayGateway.php          # Tripay implementation
-│   │   └── XenditGateway.php          # Xendit implementation
+│   │   ├── XenditGateway.php          # Xendit implementation
+│   │   ├── NotificationService.php    # idempotent in-app notifications
+│   │   ├── InstructorEarnings.php     # wallet credit on paid orders
+│   │   ├── StockReservation.php       # stock reserve/confirm/release
+│   │   └── VoucherReservation.php     # voucher reserve/consume/release
+│   ├── Support/                       # AdminAccess, InstructorAccess, Pagination,
+│   │                                  # OperationsStatus, HtmlSanitizer, FileSecurity, SessionRevoker
 │   ├── Mail/
 │   │   └── PasswordResetMail.php      # Mailable for password reset
 │   ├── Contracts/
@@ -197,16 +209,17 @@ backend/
 ├── config/                            # Configuration files
 │   ├── app.php, auth.php, cache.php
 │   ├── database.php, mail.php
-│   ├── payment.php                    # Payment gateway credentials
+│   ├── commerce.php                   # Order TTL + voucher reservation config
+│   ├── payment.php                    # Payment gateway credentials + HTTP timeouts
 │   ├── queue.php, session.php, logging.php
 ├── database/
-│   ├── migrations/                    # 18 migration files
+│   ├── migrations/                    # 27 migration files (schema source of truth)
 │   ├── seeders/                       # DatabaseSeeder
-│   └── schema.sql                     # Complete DDL reference
+│   └── schema.sql                     # SQLite-dialect reference dump (may lag migrations)
 ├── routes/
 │   ├── api.php                        # All /api/v1/* endpoints
 │   └── web.php                        # SPA fallback + sensitive paths
-├── tests/Feature/                     # PHPUnit feature tests (19 files)
+├── tests/Feature/                     # PHPUnit feature tests (42 files, 214 tests)
 ├── public/                            # Static assets + app.html
 ├── storage/                           # Logs, uploads, cache
 ├── resources/                         # Views, CSS, JS
@@ -234,26 +247,31 @@ return response()->json([...]);
 ```
 
 Key differences from typical Laravel apps:
-- **No central Policies/Gates**: Authorization checked inline per-controller via `role_key` comparison and permission array checking
-- **Custom auth middleware** (`AuthenticateApiUser`): Instead of standard Sanctum guard
-- **Session-based auth**: Not bearer-token based (Sanctum installed but not fully configured for API tokens)
+- **Hybrid authorization**: shared helpers (`AdminAccess`, `InstructorAccess`) plus Laravel `UserPolicy` for user management; controllers still verify permission/ownership server-side
+- **Custom auth middleware** (`AuthenticateApiUser`): resolves the Sanctum bearer token first, then falls back to the `web` session guard
+- **Session-first auth**: cookie session is the primary path; the `sanctum` guard is registered by the package and used as the bearer fallback
 
 ### Route Organization
 
 Routes are organized in `routes/api.php` using grouped patterns:
 
 ```php
-// Auth (separate group, web middleware for sessions)
+// Auth (separate group, web middleware for sessions + Laravel CSRF)
 Route::prefix('v1/auth')->middleware('web')->group(fn() => {...});
 
-// Courses (public + authenticated)
+// Courses (public read + authenticated mutations)
 Route::prefix('v1/courses')->group(fn() => {...});
 
+// Instructor (ownership-scoped)
+Route::prefix('v1/instructor')->middleware([EncryptCookies::class, StartSession::class, AuthenticateApiUser::class, VerifyCsrfTokenForSession::class, PreventMaintenanceAccess::class, ValidateAuthEpoch::class])->group(fn() => {
+    // /instructor/{students,sales,earnings,quizzes,quiz-attempts,courses/{id}/progress}
+});
+
 // Authenticated group (main API block)
-Route::prefix('v1')->middleware([EncryptCookies::class, StartSession::class, AuthenticateApiUser::class])->group(fn() => {
-    // Dashboard, Quizzes, Certificates, Notifications, Profile
+Route::prefix('v1')->middleware([EncryptCookies::class, StartSession::class, AuthenticateApiUser::class, VerifyCsrfTokenForSession::class, PreventMaintenanceAccess::class, ValidateAuthEpoch::class])->group(fn() => {
+    // Dashboard, /my/* (learner), Quizzes, Certificates, Notifications, Profile
     // Orders, Payments, Shop, Wallet, Settings, Media
-    // Admin sections (courses, quizzes, users, products, categories)
+    // Admin sections (courses, quizzes, users, products, categories, ops status)
     // CMS content (news, tutorials, activities, pages)
     // Homepage blocks, menus, articles
 });
@@ -269,9 +287,11 @@ Route::get('/v1/search', ...);
 
 ```
 Request
-  → PreventMaintenanceAccess (global) [blocks all except admin + public endpoints]
+  → PreventMaintenanceAccess (global) [503 for public, admin/super_admin bypass]
   → EncryptCookies + StartSession [session hydration]
-  → AuthenticateApiUser [custom auth: Sanctum → Web guard fallback]
+  → AuthenticateApiUser [sanctum bearer → web session]
+  → VerifyCsrfTokenForSession [CSRF for cookie-auth mutations; bearer exempt]
+  → PreventMaintenanceAccess + ValidateAuthEpoch [group-level]
   → throttle:N,M [rate limiting per endpoint]
   → Controller
 ```
@@ -282,17 +302,19 @@ Business logic is concentrated in `Services/` for payment processing:
 
 ```php
 interface PaymentGateway {
-    public function initiate(array $params): PaymentRecord;
-    public function handleWebhook(string $rawBody, string $signature): Result;
+    public function createPayment(Order $order, string $method): array;
+    public function verifyWebhook(array $payload, string $signature): bool;
 }
 
 class PaymentGatewayManager {
-    public function resolve(): PaymentGateway;  // Select active gateway
-    public function initiateOrder(...);          // Delegate to resolved gateway
+    public function resolve(string $gateway): PaymentGateway;  // tripay|xendit|stripe
 }
 ```
 
-Other services (LMS scoring, wallet ledger, certificate issuance) are embedded directly in controllers rather than extracted to service classes.
+Additional services: `NotificationService` (idempotent in-app notifications), `InstructorEarnings`
+(wallet ledger credit on paid orders), `StockReservation` and `VoucherReservation` (reserve/confirm/release).
+Cross-cutting helpers live in `Support/` (`AdminAccess`, `InstructorAccess`, `Pagination`, `OperationsStatus`,
+`HtmlSanitizer`, `FileSecurity`, `SessionRevoker`).
 
 ---
 
@@ -312,13 +334,16 @@ frontend/
 │   │   ├── ui.tsx                  # Design system components (Modal, DataTable, etc.)
 │   │   ├── icons.tsx               # ~80 SVG icons + color tones
 │   │   ├── RichText.tsx            # Tiptap WYSIWYG editor wrapper
+│   │   ├── remote.tsx              # useRemote/RemoteView (401/403/5xx states)
 │   │   └── ThemeVars.tsx           # Theme variable injector component
 │   ├── lib/
-│   │   ├── api.ts                  # REST API client (>90 typed functions)
-│   │   ├── db.ts                   # Client-side database (seed/installer only)
-│   │   ├── services.ts             # can(user, permission) + utility helpers
-│   │   ├── commerce.ts             # Shopping cart calculations (legacy/seed)
-│   │   ├── lms.ts                  # LMS helper functions (legacy/seed)
+│   │   ├── api.ts                  # REST API client (typed functions per domain)
+│   │   ├── menu.ts                 # Centralized nav + route guard (role/permission)
+│   │   ├── permissions.ts          # can(user, permission) helper
+│   │   ├── pagination.ts           # paginator <-> list adapter
+│   │   ├── settings.ts             # in-memory public settings (no persistence)
+│   │   ├── format.ts               # currency/date formatting helpers
+│   │   ├── types.ts                # shared domain types
 │   │   ├── i18n.ts                 # Internationalization (ID/EN)
 │   │   └── theme.ts                # SurfaceTheme/BlockTokens types
 │   ├── state/
@@ -332,6 +357,9 @@ frontend/
 │   │   │   └── Certificates.tsx    # Verify page
 │   │   └── dash/                   # 25+ dashboard page modules
 │   │       ├── Overview.tsx        # Role-based dashboard overview
+│   │       ├── Instructor.tsx      # Instructor dashboard (owned courses only)
+│   │       ├── Learner.tsx         # Learner area (my learning / quizzes)
+│   │       ├── Operations.tsx      # Super-admin ops panel (queue/scheduler/integrations)
 │   │       ├── Courses.tsx         # Course management
 │   │       ├── Quizzes.tsx         # Quiz management
 │   │       ├── Cms.tsx             # Content module generic handler
@@ -344,7 +372,8 @@ frontend/
 │   │       └── ...
 │   └── assets/                     # Static images, fonts
 ├── scripts/
-│   └── sync-backend-assets.mjs     # Postbuild: copy to backend/public
+│   ├── sync-backend-assets.mjs     # Postbuild: copy to backend/public
+│   └── verify-dashboard.mjs        # Static checks (menu/route/i18n/pagination)
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.js
@@ -372,7 +401,9 @@ function AppProvider({ children }) {
 }
 ```
 
-State is entirely server-driven — no persisted authentication data in localStorage or cookies. Session cookies are managed by Laravel's Sanctum.
+State is server-driven: `AppProvider` hydrates from the API (`/auth/me`, `/settings/public`, `/categories`).
+No business data is persisted in `localStorage`; only UI preferences (theme/language) are kept in cookies,
+while public settings live in memory (`lib/settings.ts`). Session cookies are managed by Laravel.
 
 ### Component Architecture
 
@@ -450,6 +481,13 @@ type BlockTokens = Record<string, SurfaceTheme>;
 | **Site Structure** | menus, menu_items, settings, media | 4 |
 | **Certification** | certificate_templates, certificates | 2 |
 | **System** | notifications, audit_logs, contact_messages | 3 |
+
+### Migration-driven additions (latest)
+
+- `orders`: `expires_at` (pending-order TTL), `stock_reservation_status` (reserved\|confirmed\|released\|shortage), `voucher_id`, `voucher_reservation_status`, `voucher_reserved_until`; enum `status` ditambah `cancelled`.
+- `users`: `auth_epoch` (revocation sesi setelah ganti password/suspend).
+- `sessions`: `user_id` diselaraskan ke `string(12)` + FK `nullOnDelete` ke `users.id`.
+- `notifications`: `event_key` + unique(`user_id`, `event_key`) untuk idempotensi notifikasi.
 
 ### ID Strategy
 
@@ -541,10 +579,12 @@ roles.permissions (JSON array)
   ├── student_certificates
   └── * (super admin wildcard)
 
-Authorization check: abort_unless(in_array($roleKey, ['admin', 'super_admin']) || ...)
+Authorization check: AdminAccess::allows() / InstructorAccess::authorize() (super_admin wildcard) + UserPolicy
 ```
 
-All authorization checks are **inline per-controller** — there are no centralized Laravel Policies or Gates. Each controller explicitly validates user permissions.
+Authorization combines shared helpers (`AdminAccess`, `InstructorAccess`), a Laravel `UserPolicy` for user
+management, and per-endpoint permission/ownership checks. Every decision stays server-side; the frontend
+menu merely controls visibility.
 
 ### Rate Limiting Matrix
 
@@ -568,8 +608,11 @@ All authorization checks are **inline per-controller** — there are no centrali
 | **Gateway credential protection** | Secret keys never accessible via `PUT /settings*` API | Prevent credential theft via compromised admin |
 | **Installer lock** | Permanent disable after successful installation | Prevent re-installation attacks |
 | **Backup exclusion** | Password hashes and gateway credentials excluded from exports | Protect credentials during backup |
-| **Maintenance mode** | Global middleware blocks all non-admin endpoints | Emergency site lockdown |
+| **Maintenance mode** | Global + group middleware returns 503 to public, admin/super_admin bypass | Emergency site lockdown |
 | **Fail-open on fresh install** | Maintenance mode bypasses if settings table doesn't exist | Prevent self-lockout during initial deployment |
+| **CSRF (cookie sessions)** | `VerifyCsrfTokenForSession` requires token on cookie-auth mutations; bearer exempt | Prevent cross-site request forgery |
+| **Session revocation** | `users.auth_epoch` + `ValidateAuthEpoch` invalidates stale sessions | Kill sessions after password change/suspend |
+| **Authz helpers + Policy** | `AdminAccess`/`InstructorAccess` + `UserPolicy` | Consistent server-side permission checks |
 
 ---
 
@@ -611,7 +654,7 @@ User initiates checkout
   → POST /api/v1/orders/course (or /shop)
   → Order created (status: pending)
   → POST /api/v1/orders/{id}/payment
-  → PaymentGatewayManager.resolve() → initiate()
+  → PaymentGatewayManager.resolve() (server-selected gateway) → createPayment()
   → Gateway returns redirect_url / QR / VA number
   → Payment record created (status: pending)
   → User redirected to gateway payment page
@@ -621,7 +664,7 @@ User initiates checkout
   → payload_hash checked for idempotency (UNIQUE constraint)
   → fulfillOrder() executed:
       ├─ Course order → create Enrollment
-      ├─ Shop physical → deduct stock, create shipment
+      ├─ Shop physical → confirm stock reservation (reserve/confirm/release)
       ├─ Shop digital → create DigitalDelivery (license key + download link)
       └─ Wallet → credit instructor net balance (gross - platform_fee - gateway_fee)
   → Notification sent to relevant parties
@@ -708,6 +751,8 @@ Production config from `.env.production.example`:
 | `TRIPAY_*` | Tripay API credentials |
 | `XENDIT_*` | Xendit API credentials |
 | `STRIPE_*` | Stripe API credentials |
+| `PAYMENT_MODE` / `PAYMENT_GATEWAY` | Default gateway & mode (dashboard settings can override) |
+| `PAYMENT_HTTP_TIMEOUT` / `PAYMENT_HTTP_CONNECT_TIMEOUT` | Provider HTTP limits |
 | `MAIL_*` | SMTP email configuration |
 | `GOOGLE_MAPS_API_KEY` | Google Maps embed (optional) |
 
@@ -778,8 +823,8 @@ Bootstrap auto-creates `.env` from `.env.production.example` if it doesn't exist
      │
 ┌────▼─────────────────────────────────────────────┐
 │                   Lib                            │
-│  api.ts (REST client) │ services.ts (can/guard) │
-│  theme.ts │ i18n.ts │ db.ts (seed-only)         │
+│  api.ts (REST client) │ menu.ts (nav+guard)     │
+│  permissions.ts │ settings.ts │ theme.ts │ i18n │
 └──────────────────────────────────────────────────┘
 ```
 
