@@ -1,61 +1,115 @@
 # KMSIT Computer — LMS + CMS Platform
 
-Platform **Learning Management System (LMS) + Content Management System (CMS)** production-grade: kelas online (gratis & berbayar), quiz engine, sertifikat digital ber-QR + verifikasi publik, instructor wallet & withdrawal, shop, payment gateway (Tripay / Xendit / Stripe), homepage builder block-based, menu manager ala WordPress, multi-role dashboard, audit log, multi-bahasa (ID/EN), dan dark mode.
+Platform **Learning Management System (LMS) + Content Management System (CMS) + E-commerce** production-grade: kelas online (gratis & berbayar), quiz engine, sertifikat digital ber-QR + verifikasi publik, instructor wallet & withdrawal, shop, payment gateway (Tripay / Xendit / Stripe), homepage builder block-based, menu manager ala WordPress, multi-role dashboard, audit log, multi-bahasa (ID/EN), dan dark mode.
 
-## Catatan Arsitektur Build Ini
+## Arsitektur
 
-Repositori ini berisi implementasi **full-stack yang berjalan di runtime browser** (React + Vite + Tailwind CSS 4). Seluruh arsitektur yang diminta spesifikasi Laravel/MySQL dipetakan 1:1 ke lapisan yang terisolasi:
+Repo ini berisi implementasi **monolith Laravel (backend) + React SPA (frontend)** yang berjalan sebagai satu proses deploy:
 
-| Konsep Laravel (production)        | Implementasi di build ini                          |
-| ---------------------------------- | -------------------------------------------------- |
-| MySQL + Eloquent migrations        | `src/lib/db.ts` — relational table store (FK, cascade, timestamps, unique slug) |
-| Service layer / Business logic     | `src/lib/lms.ts`, `src/lib/commerce.ts`, `src/lib/services.ts` |
-| Middleware / Policy / Gate         | Guard route + `can(user, permission)` RBAC (`src/state/store.tsx`, `src/App.tsx`) |
-| `.env` + config/                   | Settings tersimpan di tabel `settings` (credential gateway di-mask, tidak pernah di-expose) |
-| Webhook payment gateway            | `PaymentService.handleWebhook()` — signature verification + idempotency log |
-| Blade views                        | React components (`src/pages/...`)                 |
+| Layer | Detail |
+|---|---|
+| **Backend API** | `backend/` — Laravel 13 (PHP 8.4), MySQL, RESTful API di `/api/v1` |
+| **Frontend SPA** | `frontend/` — React 18, TypeScript, Vite, Tailwind CSS 4, HashRouter |
+| **Database** | MySQL — skema dari Laravel migration (`backend/database/migrations/`, 27 file); `schema.sql` hanya dump referensi SQLite |
+| **Build pipeline** | `npm run build` → sync otomatis ke `backend/public/app.html` |
 
-> Pada deployment Laravel production, tabel-tabel di `db.ts` berkorespondensi 1:1 dengan **`database/schema.sql`** (40+ tabel: `users, roles, permissions, sessions, categories, courses, course_sections, lessons, enrollments, lesson_progress, quizzes, quiz_questions, quiz_options, quiz_attempts, certificates, certificate_templates, articles, news, tutorials, activities, pages, homepage_blocks, menus, menu_items, media, orders, order_items, payments, webhook_logs, instructor_wallet_transactions, withdrawals, products, product_variants, vouchers, cart_items, digital_deliveries, notifications, audit_logs, contact_messages, settings`) — foreign key, index, dan unique constraint anti-duplikasi sudah termasuk. Impor: `mysql -u root -p < database/schema.sql`.
+### Struktur Proyek
 
-## Fitur
-
-- **Installer ala WordPress** — welcome → system requirements (PASS/FAIL) → konfigurasi MySQL (test connection) → website + Super Admin pertama → migrasi → **installer terkunci**. **Tidak ada demo user.**
-- **RBAC 4 role**: Super Admin (full), Admin (konten & operasional), Instructor, Student — proteksi di level route *dan* service (akses URL manual → 403).
-- **LMS**: Course → Section → Lesson (teks, YouTube, video, PDF, file, gambar, URL, embed), status Draft/Pending/Published/Rejected/Archived, moderasi admin, preview lesson, progress tracking.
-- **Kelas Gratis vs Berbayar** — backend guard: materi hanya terbuka jika `enrollment` valid (bukan sekadar menyembunyikan tombol).
-- **Payment**: abstraksi `PaymentGatewayInterface` → Tripay / Xendit / Stripe, mode sandbox & live, biaya per metode, **webhook + signature + proteksi duplikasi** (enrollment/wallet tidak diproses dua kali).
-- **Revenue split 15%** fee platform (konfigurable) — gross / platform fee / payment fee / net tercatat di **ledger wallet** yang auditable; withdrawal Pending → Approved → Processing → Completed / Rejected.
-- **Quiz**: Pilihan Ganda, Benar/Salah, Jawaban Ganda, Isian Singkat — timer, acak soal, batas percobaan, **scoring di backend/service**.
-- **Sertifikat digital**: terbit otomatis (progress 100% + lulus quiz), nomor unik `KMSIT-YYYY-NNNNNN`, QR code, halaman verifikasi publik `/certificate/verify/{number}`, cetak/PDF, status revoke.
-- **CMS**: Homepage builder (16 tipe blok: add/edit/duplicate/reorder/enable), Menu manager (nested, lokasi header/footer), About Us 100% CMS, Pages, Artikel/Berita/Tutorial/Kegiatan dengan editor **Tiptap**, Media Library, YouTube auto-embed (sanitized anti-XSS).
-- **Shop**: produk, kategori, stok, cart, checkout via payment gateway yang sama.
-- **Sistem**: audit log, notifikasi per role, global search, backup export (tanpa credential), maintenance mode, multi-bahasa ID/EN, dark/light/system, SEO fields, responsive penuh.
-
-## Menjalankan
-
-```bash
-npm install
-npm run dev       # development
-npm run build     # production → dist/
+```
+├── backend/              # Laravel monolith
+│   ├── app/
+│   │   ├── Http/Controllers/Api/V1/  # 30+ controller API
+│   │   ├── Http/Middleware/          # AuthenticateApiUser, PreventMaintenanceAccess
+│   │   ├── Models/                   # 39 model domain
+│   │   ├── Services/                 # PaymentGatewayManager + gateway implementations
+│   │   └── Mail/                     # PasswordResetMail
+│   ├── config/           # app, auth, cache, database, mail, payment, queue, session
+│   ├── database/
+│   │   ├── migrations/   # sumber skema MySQL (LMS, commerce, CMS, certs, notifikasi, dll)
+│   │   ├── schema.sql    # dump referensi dialek SQLite — bukan untuk impor MySQL
+│   │   └── seeders/
+│   ├── routes/
+│   │   ├── api.php       # Semua endpoint /api/v1/*
+│   │   └── web.php       # SPA fallback + sensitive path protection
+│   ├── tests/Feature/    # 19 test PHPUnit
+│   ├── public/           # Static assets + app.html (hasil build frontend)
+│   └── bootstrap/        # Auto .env creation on first boot
+├── frontend/             # React SPA
+│   ├── src/
+│   │   ├── pages/        # Public (11 halaman) + Dashboard (25+ route per role)
+│   │   ├── components/   # Shell, ui design-system, icons, RichText editor
+│   │   ├── lib/          # api.ts (REST client), db.ts, lms.ts, commerce.ts, theme.ts, i18n.ts
+│   │   ├── state/        # store.tsx (AppProvider: user, theme, language, toast)
+│   │   └── assets/
+│   └── scripts/          # sync-backend-assets.mjs (postbuild hook)
+├── docs/
+│   ├── blueprint.md      # System Blueprint lengkap
+│   └── architecture.md   # Dokumentasi arsitektur sistem
+└── INSTALL.md            # Panduan instalasi production
 ```
 
-Saat pertama dibuka: **Installation Wizard** muncul → buat Super Admin → login → redirect `/dashboard` sesuai role.
+## Fitur Utama
+
+- **Installer ala WordPress** — welcome → system requirements (PASS/FAIL) → konfigurasi DB (test connection) → website + Super Admin pertama → migrasi → **installer terkunci**. **Tidak ada demo user.**
+- **RBAC 4 role**: Super Admin (full), Admin (konten & operasional), Instructor (kelas sendiri), Student (belajar) — proteksi di level route *dan* service.
+- **LMS**: Course → Section → Lesson (teks, YouTube, video, PDF, file, gambar, URL, embed), status Draft/Pending/Published/Rejected/Archived, moderasi admin, preview lesson, progress tracking per siswa.
+- **Payment**: Abstraksi `PaymentGatewayInterface` → Tripay / Xendit / Stripe, mode sandbox & live, biaya per metode, **webhook + signature + idempotency log** (order/wallet tidak diproses dua kali).
+- **Revenue split 15%** fee platform (konfigurable) — gross / platform fee / payment fee / net tercatat di ledger wallet yang auditable; withdrawal Pending → Approved → Processing → Completed / Rejected.
+- **Quiz**: Pilihan Ganda, Benar/Salah, Jawaban Ganda, Isian Singkat — timer, acak soal, batas percobaan, scoring di backend/controller.
+- **Sertifikat digital**: terbit otomatis (progress 100% + lulus quiz), nomor unik `KMSIT-YYYY-NNNNNN`, QR code, halaman verifikasi publik `/certificate/verify/{number}`, cetak/PDF, status revoke.
+- **CMS**: Homepage builder (drag-and-drop @dnd-kit), Menu manager (nested, header/footer), Pages, Artikel/Berita/Tutorial/Kegiatan dengan editor Tiptap WYSIWYG, Media Library, SEO fields.
+- **Shop**: Produk fisik & digital, varian produk, stok, cart, checkout via payment gateway, voucher diskon, license key untuk produk digital.
+- **Sistem**: Audit log, notifikasi in-app per user, global search, backup export (tanpa credential), maintenance mode, multi-bahasa ID/EN, tema visual website & dashboard terpisah, responsive penuh.
+
+## Menjalankan Development
+
+```bash
+cd frontend
+npm install
+npm run dev       # development server :5173
+npm run build     # production → dist/ lalu auto-sync ke ../backend/public/
+```
+
+Saat pertama dibuka (production): **Installation Wizard** muncul → buat Super Admin → login → redirect `/dashboard` sesuai role.
 
 ## Alur Kunci
 
-- **Pembayaran**: Student → Order → `PaymentService.initiate()` → Gateway (sandbox simulator) → `fireSandboxWebhook()` → `handleWebhook()` (verify signature → cek duplikasi → `DB transaction`) → Order PAID → Enrollment → Wallet ledger (net 85%) → Notifikasi → Audit.
-- **Sertifikat**: lesson selesai / quiz lulus → `CertificateService.checkAndIssue()` (eligibility check + idempotent) → nomor unik → QR → verifikasi publik.
+- **Pembayaran**: Student → Order → `PaymentGatewayManager.initiate()` → Gateway (sandbox/live) → `Webhook callback` → verify signature + idempotency check → `fulfillOrder()` (enrollment/stok/wallet/delivery) → Notifikasi → Audit log.
+- **Sertifikat**: lesson selesai / quiz lulus → eligibility check (idempotent) → nomor unik + QR → verifikasi publik tanpa login.
+- **Revenue**: Order paid → ledger entry (gross → platform_fee 15% → net 85%) → saldo instructor → withdrawal request → admin approval.
 
 ## Keamanan
 
-Password di-hash (SHA-256 + salt per user), session bertoken dengan expiry, credential gateway hanya di settings ter-mask, webhook wajib signature valid, HTML konten di-sanitize (script/iframe/event-handler dibuang), input tervalidasi, proteksi route berbasis permission, installer terkunci permanen setelah selesai, backup tidak menyertakan hash password/credential.
+- Password di-hash dengan Laravel Hash (bcrypt, tanpa salt kolom terpisah), session bertoken dengan expiry.
+- Kredensial gateway hanya di `.env` / environment, tidak pernah tersimpan di database atau diubah lewat API biasa.
+- Webhook wajib signature valid, payload_hash unique constraint anti-duplikasi.
+- HTML konten di-sanitize (script/iframe/event-handler dibuang), input divalidasi ketat.
+- Proteksi route berbasis permission inline per-controller.
+- Installer terkunci permanen setelah selesai.
+- Backup tidak menyertakan hash password/credential.
+- Path sensitif (`/.env`, `/database`, `/backend`) diblok 404 secara eksplisit.
 
-## API (kontrak REST production — `/api/v1`)
+## API (REST — `/api/v1`)
 
-Auth (`POST login/logout/register/forgot-password`), Courses/Lessons/Quiz CRUD, Certificates + `GET /certificates/verify/{number}`, Articles/News/Tutorials, Users, Orders, Payments (`POST /payments/create`, `/payments/callback`, `/payments/webhook`), Instructor (`/instructor/profile|courses|balance|withdrawals`), Student (`/student/enrollments|progress|quiz-results|certificates`) — response konsisten via API Resource, token auth + rate limiting.
+- **Auth**: login, logout, register, forgot-password, reset-password, profile CRUD, avatar upload
+- **LMS**: courses index/show/enroll, lessons complete, progress tracking, quizzes, certificates
+- **Commerce**: orders course/shop, payments webhook, products, cart, vouchers, wallet, withdrawals, digital delivery
+- **CMS**: articles, news, tutorials, activities, pages, homepage blocks, menus, categories, media
+- **Admin**: users CRUD, roles/permissions, audit logs, backup export, contact messages, settings (public/admin/payment/theme)
+- **Public**: search, contact form, certificate verification, health check
+
+Autentikasi via session-cookie Laravel (guard `web`), diperkuat CSRF Sanctum. Rate limiting diterapkan per grup endpoint.
 
 ## Troubleshooting
 
 - **Ingin mengulang instalasi** → Dashboard → Pengaturan → Sistem & Audit → Danger Zone → Reset Aplikasi.
 - **Lupa password Super Admin** → reset via installer ulang (setelah reset) atau reset password oleh Super Admin lain di menu Semua User.
 - **Pembayaran tidak masuk** → periksa Dashboard → Pembayaran → Webhook Log (processed / duplicate / invalid).
+- **File unggahan 404** → jalankan `php artisan storage:link` (atau biarkan installer menjalankannya).
+
+## Referensi
+
+- [System Blueprint](docs/blueprint.md) — dokumentasi teknis lengkap (skema data, peta API, arsitektur detail, risiko)
+- [INSTALL.md](INSTALL.md) — panduan instalasi production
+- [Migrations](backend/database/migrations/) — sumber skema MySQL (jalankan `php artisan migrate --force`)
+# kmsit

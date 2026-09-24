@@ -14,10 +14,39 @@ Panduan instalasi production (arsitektur **Laravel + MySQL**) untuk LMS + CMS + 
 | Web server | Apache 2.4+ (mod_rewrite) **atau** Nginx |
 | Lain | Composer 2.x, Node 20+ (build asset), HTTPS (wajib untuk payment callback) |
 
+> **Status implementasi saat ini:** repo terbagi dua: `frontend/` (React/Vite) dan `backend/` (Laravel). `npm run build` di dalam `frontend/` membuild ke `frontend/dist/` lalu otomatis menyalinnya (hook `postbuild`, lihat `frontend/scripts/sync-backend-assets.mjs`) ke `backend/public/app.html` + `backend/public/assets/` (membersihkan file asset lama sebelum menyalin yang baru). Domain target lokal/production yang didaftarkan adalah `kmsitcomputer.com`; arahkan domain tersebut ke `backend/public` dan gunakan HTTPS publik sebelum payment live. Jangan mengarahkan domain live ke root repository.
+
 ## 2. Upload & Konfigurasi Web Server
 
+### Build dan backend
+
+```bash
+cd frontend
+npm ci
+npm run build   # build ke dist/ lalu auto-sync ke ../backend/public/ (postbuild hook)
+cd ../backend
+composer install --no-dev --optimize-autoloader
+php artisan key:generate
+php artisan storage:link
+php artisan migrate --force
+php artisan optimize
+# worker production (jalankan sebagai service/ supervisor)
+php artisan queue:work --sleep=3 --tries=3 --timeout=90
+```
+
+Migration adalah sumber kebenaran database. Jalankan pada MySQL production:
+
+```bash
+php artisan migrate --force
+php artisan schema:dump --database=mysql --path=database/schema.mysql.sql --without-migration-data
+```
+
+Perintah dump harus dijalankan pada server yang memiliki `DB_*` production valid. `backend/database/schema.sql` yang dibuat dari environment SQLite lokal hanya referensi SQLite, bukan file import MySQL.
+
+Salin variabel production dari `backend/.env.production.example` ke `backend/.env`. Isi secret hanya di server atau secret manager.
+
 1. Upload seluruh project ke server, idealnya **di luar** document root.
-2. Install dependency: `composer install --no-dev --optimize-autoloader` lalu `npm ci && npm run build`.
+2. Install dependency: `cd backend && composer install --no-dev --optimize-autoloader` lalu `cd ../frontend && npm ci && npm run build`.
 3. **Apache** — arahkan DocumentRoot hanya ke `/public` (melindungi `.env`, migration, dan source):
 
 ```apache
