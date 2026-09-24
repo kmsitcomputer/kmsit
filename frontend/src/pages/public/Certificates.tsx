@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import QRCode from 'react-qr-code';
-import { db, type Certificate } from '../../lib/db';
-import { fmtDate, getSetting } from '../../lib/services';
-import { CertificateService, CourseService } from '../../lib/lms';
-import { useDB } from '../../state/store';
+import { fmtDate } from '../../lib/format';
+import { getSetting } from '../../lib/settings';
 import { api, type ApiCertificate } from '../../lib/api';
 import { Icon } from '../../components/icons';
 import { Badge, EmptyState, Modal } from '../../components/ui';
@@ -12,15 +10,12 @@ import { PublicShell } from '../../components/Shell';
 
 /* ================= certificate sheet ================= */
 
-export function CertificateSheet({ cert, compact }: { cert: Certificate; compact?: boolean }) {
-  const remote = cert as ApiCertificate;
-  const template = remote.template ?? db.byId('certificateTemplates', cert.templateId);
-  const course = CourseService.byId(cert.courseId);
-  const student = db.byId('users', cert.userId);
-  const instructor = course ? db.byId('users', course.instructorId) : undefined;
-  const studentName = remote.studentName ?? student?.name;
-  const courseTitle = remote.courseTitle ?? course?.title;
-  const instructorName = remote.instructorName ?? instructor?.name;
+/** Renders only what the certificate API returned (names/titles/template come from the server). */
+export function CertificateSheet({ cert, compact }: { cert: ApiCertificate; compact?: boolean }) {
+  const template = cert.template;
+  const studentName = cert.studentName;
+  const courseTitle = cert.courseTitle;
+  const instructorName = cert.instructorName;
   const siteUrl = getSetting('site_url', window.location.origin);
   const verifyUrl = `${siteUrl}/#/certificate/verify/${cert.number}`;
   const theme = template?.theme ?? 'navy';
@@ -80,9 +75,8 @@ export function CertificateSheet({ cert, compact }: { cert: Certificate; compact
 
 /* ================= modal (preview + print) ================= */
 
-export function CertificateModal({ certId, certificate, open, onClose }: { certId?: string; certificate?: ApiCertificate; open: boolean; onClose: () => void }) {
-  useDB();
-  const cert = certificate ?? (certId ? db.byId('certificates', certId) : undefined);
+export function CertificateModal({ certificate, open, onClose }: { certificate: ApiCertificate | null; open: boolean; onClose: () => void }) {
+  const cert = certificate;
   if (!cert) return null;
   const valid = cert.status === 'issued';
   return (

@@ -328,7 +328,7 @@ CREATE TABLE "orders"(
   "id" varchar not null,
   "user_id" varchar not null,
   "type" varchar check("type" in('course', 'shop')) not null,
-  "status" varchar check("status" in('pending', 'paid', 'failed', 'expired')) not null default 'pending',
+  "status" varchar check("status" in('pending', 'paid', 'failed', 'expired', 'cancelled')) not null default 'pending',
   "subtotal" integer not null default '0',
   "discount_amount" integer not null default '0',
   "voucher_code" varchar,
@@ -340,12 +340,18 @@ CREATE TABLE "orders"(
   "shipping_name" varchar,
   "shipping_address" text,
   "shipping_phone" varchar,
+  "voucher_id" varchar,
+  "voucher_reservation_status" varchar check("voucher_reservation_status" in('reserved', 'consumed', 'released')),
+  "voucher_reserved_until" datetime,
+  "stock_reservation_status" varchar check("stock_reservation_status" in('reserved', 'confirmed', 'released', 'shortage')),
   "created_at" datetime,
   "updated_at" datetime,
   foreign key("user_id") references "users"("id") on delete cascade,
   primary key("id")
 );
 CREATE INDEX "orders_user_id_status_index" on "orders"("user_id", "status");
+CREATE INDEX "orders_voucher_reservation_index" on "orders"("voucher_id", "voucher_reservation_status", "voucher_reserved_until");
+CREATE INDEX "orders_voucher_due_index" on "orders"("voucher_reservation_status", "voucher_reserved_until");
 CREATE TABLE "order_items"(
   "id" varchar not null,
   "order_id" varchar not null,
@@ -391,6 +397,7 @@ CREATE INDEX "payments_order_id_status_index" on "payments"(
   "status"
 );
 CREATE UNIQUE INDEX "payments_reference_unique" on "payments"("reference");
+CREATE INDEX "payments_gateway_merchant_ref_index" on "payments"("gateway", "merchant_ref");
 CREATE TABLE "webhook_logs"(
   "id" varchar not null,
   "reference" varchar not null,
@@ -527,6 +534,7 @@ CREATE INDEX "instructor_wallet_transactions_user_id_status_index" on "instructo
   "user_id",
   "status"
 );
+CREATE UNIQUE INDEX "wallet_earning_idempotency_unique" on "instructor_wallet_transactions"("order_id", "user_id", "type", "ref_id");
 CREATE TABLE "withdrawals"(
   "id" varchar not null,
   "user_id" varchar not null,

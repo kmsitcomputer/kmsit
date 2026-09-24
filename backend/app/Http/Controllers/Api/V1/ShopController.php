@@ -11,18 +11,20 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use App\Support\FileSecurity;
 
 class ShopController extends Controller
 {
     public function digitalDeliveries(Request $request): JsonResponse
     {
-        return response()->json(['deliveries' => DigitalDelivery::with('product:id,name,slug')->where('user_id', $request->user()->id)->latest()->get()]);
+        $query = DigitalDelivery::with('product:id,name,slug')->where('user_id', $request->user()->id)->latest()->orderByDesc('id');
+        return response()->json(['deliveries' => \App\Support\Pagination::paginate($query, $request)]);
     }
 
     public function download(Request $request, string $deliveryId)
     {
         $delivery = DigitalDelivery::where('id', $deliveryId)->where('user_id', $request->user()->id)->where('status', 'active')->firstOrFail();
-        if (!$delivery->download_url || !Storage::disk('local')->exists($delivery->download_url)) abort(404, 'File digital tidak tersedia.');
+        if (!$delivery->download_url || !FileSecurity::isPathWithin($delivery->download_url, 'digital') || !Storage::disk('local')->exists($delivery->download_url)) abort(404, 'File digital tidak tersedia.');
         $delivery->increment('downloads');
         return Storage::disk('local')->download($delivery->download_url);
     }
@@ -30,6 +32,7 @@ class ShopController extends Controller
     public function validateVoucher(Request $request): JsonResponse
     {
         $data = $request->validate(['code' => ['required', 'string', 'max:40'], 'subtotal' => ['required', 'integer', 'min:0']]);
+        app(\App\Services\VoucherReservation::class)->expireDue(Str::upper(trim($data['code'])));
         $voucher = Voucher::where('code', Str::upper(trim($data['code'])))->where('active', true)->first();
         if (!$voucher || ($voucher->expires_at && $voucher->expires_at->isPast()) || ($voucher->usage_limit > 0 && $voucher->used_count >= $voucher->usage_limit)) {
             return response()->json(['message' => 'Voucher tidak valid atau sudah tidak tersedia.'], 422);
@@ -42,11 +45,13 @@ class ShopController extends Controller
 
     public function products(Request $request): JsonResponse
     {
-        $products = Product::with('variants')
+        $products = Product::with(['variants', 'category:id,name,slug'])
             ->where('status', 'published')
-            ->when($request->string('search')->trim()->value(), fn ($query, string $search) => $query->where('name', 'like', "%{$search}%"))
-            ->latest()
-            ->paginate(min($request->integer('per_page', 12), 50));
+            ->when($request->string('search')->trim()->value(), fn ($query, string $search) => $query->where('name', 'like', '%' . addcslashes($search, '%_\\') . '%'))
+            ->when($request->string('category_id')->trim()->value(), fn ($query, string $categoryId) => $query->where('category_id', $categoryId))
+            ->when($request->string('kind')->trim()->value(), fn ($query, string $kind) => $kind === 'digital' ? $query->where('is_digital', true) : ($kind === 'physical' ? $query->where('is_digital', false) : $query))
+            ->latest()->orderByDesc('id');
+        $products = \App\Support\Pagination::paginate($products, $request, 12);
 
         return response()->json($products);
     }

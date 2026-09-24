@@ -1,24 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { db, type Article, type NewsItem, type Tutorial, type Activity, type Course, type HomeBlock, type Product, type ID } from '../../lib/db';
-import { fmtMoney, fmtDate, getSetting, timeAgo, youtubeId } from '../../lib/services';
-import { CourseService, CategoryService, EnrollmentService, ProgressService } from '../../lib/lms';
-import { ShopService, OrderService, productMinPrice, variantStock } from '../../lib/commerce';
-import { useApp, useDB } from '../../state/store';
-import { api, type ApiCart } from '../../lib/api';
-import { Icon, type IconName } from '../../components/icons';
+import type { Course, HomeBlock, Product, ID } from '../../lib/types';
+import { coursePrice, fmtMoney, fmtDate, timeAgo, youtubeId } from '../../lib/format';
+import { getSetting } from '../../lib/settings';
+import { useApp } from '../../state/store';
+import { CART_CHANGED_EVENT } from '../../components/Shell';
+import { Pager, RemoteView, useRemote } from '../../components/remote';
+
+/** Lowest price a product can be bought for (display only; the server prices the cart). */
+const productMinPrice = (p: Product): number => {
+  if (p.variants && p.variants.length > 0) return Math.min(...p.variants.map((v) => v.price));
+  return p.discountPrice > 0 && p.discountPrice < p.price ? p.discountPrice : p.price;
+};
+import { api, type ApiCart, type CourseWithMeta } from '../../lib/api';
+import { Icon, iconTone, iconToneBg, type IconName } from '../../components/icons';
 import { Avatar, Badge, EmptyState, Reveal, RichHTML, SafeImg, Select, YouTube } from '../../components/ui';
 import { PublicShell } from '../../components/Shell';
 
 /* ================= course card ================= */
 
-export function CourseCard({ course, delay = 0 }: { course: Course; delay?: number }) {
-  const { user } = useApp();
-  useDB();
-  const enrolled = user ? EnrollmentService.has(user.id, course.id) : false;
-  const prog = user && enrolled ? ProgressService.of(user.id, course.id) : null;
-  const price = CourseService.effectivePrice(course);
-  const instructor = db.byId('users', course.instructorId);
+export function CourseCard({ course, delay = 0, progressPct }: { course: Course; delay?: number; progressPct?: number }) {
+  const { categoryName: lookupCategory } = useApp();
+  const price = coursePrice(course);
+  const meta = course as CourseWithMeta;
+  const instructorName = meta.instructorName;
+  const categoryName = meta.categoryName ?? (lookupCategory(course.categoryId) || 'Umum');
   return (
     <Link to={`/courses/${course.slug}`} className="card card-hover group overflow-hidden block anim-rise" style={{ animationDelay: `${delay}ms` }}>
       <div className="relative overflow-hidden">
@@ -26,28 +32,26 @@ export function CourseCard({ course, delay = 0 }: { course: Course; delay?: numb
         <div className="absolute left-2.5 top-2.5 flex gap-1.5">
           {course.isFree ? <Badge tone="brand">Gratis</Badge> : course.featured ? <Badge tone="accent"><Icon name="star" size={10} /> Unggulan</Badge> : null}
         </div>
-        {enrolled && prog && (
+        {progressPct !== undefined && (
           <div className="absolute inset-x-0 bottom-0 bg-base-950/80 px-3 py-1.5 backdrop-blur-sm">
             <div className="flex items-center gap-2">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base-700"><div className="h-full rounded-full bg-brand-400 transition-all duration-500" style={{ width: `${prog.pct}%` }} /></div>
-              <span className="font-mono text-[10px] font-bold text-brand-300">{prog.pct}%</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-base-700"><div className="h-full rounded-full bg-brand-400 transition-all duration-500" style={{ width: `${progressPct}%` }} /></div>
+              <span className="font-mono text-[10px] font-bold text-brand-300">{progressPct}%</span>
             </div>
           </div>
         )}
       </div>
       <div className="p-4">
         <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-base-400">
-          <span>{CategoryService.name(course.categoryId)}</span><span>·</span><span>{course.level}</span>
+          <span>{categoryName}</span><span>·</span><span>{course.level}</span>
         </div>
         <h3 className="mt-1.5 font-display text-[15px] font-bold leading-snug text-base-900 dark:text-base-50 line-clamp-2 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">{course.title}</h3>
         <p className="mt-2 flex items-center gap-1.5 text-xs text-base-500 dark:text-base-400">
-          <Avatar name={instructor?.name ?? '?'} src={instructor?.avatar} size={18} /> {instructor?.name ?? '—'}
+          <Avatar name={instructorName ?? '?'} size={18} /> {instructorName ?? '—'}
         </p>
         <div className="mt-3 flex items-center justify-between border-t border-base-100 dark:border-base-800 pt-3">
           <span className="flex items-center gap-3 font-mono text-[10px] text-base-400">
-            <span className="flex items-center gap-1"><Icon name="play" size={11} />{CourseService.lessonCount(course.id)}</span>
-            <span className="flex items-center gap-1"><Icon name="clock" size={11} />{CourseService.duration(course.id)}m</span>
-            <span className="flex items-center gap-1"><Icon name="users" size={11} />{CourseService.studentsCount(course.id)}</span>
+            <span className="flex items-center gap-1"><Icon name="users" size={11} />{meta.enrollmentsCount ?? 0}</span>
           </span>
           <span className={`font-display text-sm font-bold ${course.isFree ? 'text-brand-600 dark:text-brand-400' : 'text-base-900 dark:text-base-50'}`}>
             {course.isFree ? 'Gratis' : fmtMoney(price)}
@@ -82,13 +86,13 @@ function HeroBlock({ block }: { block: HomeBlock }) {
   const { user } = useApp();
   const nav = useNavigate();
   const [q, setQ] = useState('');
-  const stats = [
-    { label: 'Kelas Aktif', value: db.count('courses', (c) => c.status === 'published') },
-    { label: 'Student', value: db.count('users', (u) => u.roleKey === 'student') },
-    { label: 'Sertifikat', value: db.count('certificates', (c) => c.status === 'issued') },
-  ];
+  const [courseCount, setCourseCount] = useState<number | null>(null);
+  useEffect(() => { void api.coursePage({ per_page: 1 }).then((page) => setCourseCount(page.total)).catch(() => setCourseCount(0)); }, []);
+  // Only "Kelas Aktif" is derivable from the public courses endpoint — total students / certificates
+  // have no public read endpoint yet, so they're omitted here rather than faked.
+  const stats = courseCount === null ? [] : [{ label: 'Kelas Aktif', value: courseCount }];
   return (
-    <section className="relative overflow-hidden">
+    <section className="surface-hero relative overflow-hidden">
       <div className="absolute inset-0 grid-bg" />
       <div className="absolute -top-40 left-1/4 h-96 w-96 rounded-full bg-brand-500/10 blur-3xl" />
       <div className="absolute top-20 right-0 h-72 w-72 rounded-full bg-accent-400/[0.08] blur-3xl" />
@@ -100,7 +104,7 @@ function HeroBlock({ block }: { block: HomeBlock }) {
           </p>
           <h1 className="mt-5 font-display text-3xl sm:text-5xl font-bold leading-[1.1] tracking-tight text-base-900 dark:text-base-50">
             {(block.settings.heading || 'Kuasai Skill Komputer').split('\n').map((line, i) => (
-              <span key={i} className="block">{i === 1 ? <span className="text-brand-500">{line}</span> : line}</span>
+              <span key={i} className="block">{i === 1 ? <span className="surface-hero-accent">{line}</span> : line}</span>
             ))}
           </h1>
           <p className="mt-4 max-w-lg text-base leading-7 text-base-500 dark:text-base-400">{block.settings.sub}</p>
@@ -145,7 +149,7 @@ function HeroBlock({ block }: { block: HomeBlock }) {
           <div className="mt-4 grid grid-cols-3 gap-3">
             {(['code', 'award', 'chart'] as IconName[]).map((ic, i) => (
               <div key={ic} className="card card-hover flex items-center justify-center gap-2 px-3 py-3 text-xs font-bold text-base-600 dark:text-base-300 anim-rise" style={{ animationDelay: `${200 + i * 90}ms` }}>
-                <Icon name={ic} size={15} className="text-brand-500" /> {['Materi Interaktif', 'Sertifikat QR', 'Progress Tracking'][i]}
+                <Icon name={ic} size={15} className={iconTone(ic)} /> {['Materi Interaktif', 'Sertifikat QR', 'Progress Tracking'][i]}
               </div>
             ))}
           </div>
@@ -172,140 +176,141 @@ function MapBlock({ block }: { block: HomeBlock }) {
   );
 }
 
+function StatsBlock() {
+  const { categories } = useApp();
+  const [courseTotal, setCourseTotal] = useState<number | null>(null);
+  useEffect(() => { void api.coursePage({ per_page: 1 }).then((page) => setCourseTotal(page.total)).catch(() => setCourseTotal(0)); }, []);
+  if (courseTotal === null) return null;
+  // Only numbers the public API can state exactly are shown (no client-side estimates).
+  const items: Array<{ icon: IconName; label: string; value: number }> = [
+    { icon: 'book', label: 'Kelas Terbit', value: courseTotal },
+    { icon: 'tag', label: 'Kategori Kelas', value: categories.filter((c) => c.scope === 'course').length },
+  ];
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {items.map((it, i) => (
+          <Reveal key={it.label} delay={i * 70}>
+            <div className="card card-hover flex items-center gap-3.5 p-4">
+              <span className={`flex h-11 w-11 items-center justify-center rounded-xl ${iconToneBg(it.icon)} ${iconTone(it.icon)}`}><Icon name={it.icon} size={20} /></span>
+              <div>
+                <p className="font-display text-xl font-bold text-base-900 dark:text-base-50 tabular-nums">{it.value}</p>
+                <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{it.label}</p>
+              </div>
+            </div>
+          </Reveal>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CoursesBlock({ block }: { block: HomeBlock }) {
+  const s = block.settings;
+  const [courses, setCourses] = useState<Course[] | null>(null);
+  useEffect(() => {
+    const query = block.type === 'featured_courses' ? { featured: true } : block.type === 'free_courses' ? { type: 'free' } : { sort: 'latest' };
+    void api.courses({ per_page: 6, ...query }).then(setCourses).catch(() => setCourses([]));
+  }, [block.type]);
+  if (courses === null) return null;
+  const list = courses;
+  if (list.length === 0) return null;
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      <SectionHead title={s.title || 'Kelas'} sub={s.sub} to="/courses" />
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {list.slice(0, 6).map((c, i) => <CourseCard key={c.id} course={c} delay={i * 60} />)}
+      </div>
+    </section>
+  );
+}
+
+function CategoriesBlock({ block }: { block: HomeBlock }) {
+  const s = block.settings;
+  const { categories } = useApp();
+  const cats = categories.filter((c) => c.scope === 'course');
+  if (cats.length === 0) return null;
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      <SectionHead title={s.title || 'Kategori'} to="/courses" />
+      <div className="flex flex-wrap gap-2.5">
+        {cats.map((c, i) => (
+          <Reveal key={c.id} delay={i * 40}>
+            <Link to={`/courses?cat=${c.id}`} className="card card-hover flex items-center gap-2.5 px-4 py-2.5 text-sm font-bold text-base-700 dark:text-base-200">
+              <Icon name="tag" size={14} className="text-brand-500" />{c.name}
+            </Link>
+          </Reveal>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// No public endpoint currently returns an instructor list (or embeds instructor name on course
+// records reachable from the frontend's api.courses() typing) — gracefully hidden rather than
+// showing broken/empty cards. A dedicated public instructors endpoint would unlock this section.
+function InstructorsBlock() { return null; }
+
+function ContentSectionBlock({ block }: { block: HomeBlock }) {
+  const s = block.settings;
+  const table = block.type as 'articles' | 'news' | 'tutorials' | 'activities';
+  const [rows, setRows] = useState<import('../../lib/api').ApiContentRow[] | null>(null);
+  useEffect(() => { void api.content(table).then((items) => setRows(items as import('../../lib/api').ApiContentRow[])).catch(() => setRows([])); }, [table]);
+  if (rows === null) return null;
+  const sorted = [...rows].sort((a, b) => (b.publishedAt ?? b.createdAt) - (a.publishedAt ?? a.createdAt));
+  if (sorted.length === 0) return null;
+  const conf = {
+    articles: { to: '/articles', icon: 'file-text' as IconName },
+    news: { to: '/news', icon: 'news' as IconName },
+    tutorials: { to: '/tutorials', icon: 'book-open' as IconName },
+    activities: { to: '/activities', icon: 'calendar' as IconName },
+  }[table];
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      <SectionHead title={s.title || table} to={conf.to} />
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {sorted.slice(0, 3).map((row, i) => (
+          <Reveal key={row.id} delay={i * 60}>
+            <Link to={`${conf.to}/${row.slug}`} className="card card-hover group block overflow-hidden">
+              <SafeImg src={row.thumbnail} alt={row.title} label={row.title} className="aspect-video w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
+              <div className="p-4">
+                <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{fmtDate(row.publishedAt ?? row.createdAt)}</p>
+                <h3 className="mt-1 font-display text-[15px] font-bold leading-snug text-base-900 dark:text-base-50 line-clamp-2 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">{row.title}</h3>
+                <p className="mt-1.5 text-xs leading-5 text-base-500 dark:text-base-400 line-clamp-2">{row.excerpt ?? row.description}</p>
+              </div>
+            </Link>
+          </Reveal>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function BlockRenderer({ block }: { block: HomeBlock }) {
   const s = block.settings;
   switch (block.type) {
     case 'hero': return <HeroBlock block={block} />;
     case 'map': return <MapBlock block={block} />;
-    case 'stats': {
-      const items = [
-        { icon: 'book' as IconName, label: 'Kelas Terbit', value: db.count('courses', (c) => c.status === 'published') },
-        { icon: 'users' as IconName, label: 'Total Student', value: db.count('users', (u) => u.roleKey === 'student') },
-        { icon: 'grad-cap' as IconName, label: 'Instructor', value: db.count('users', (u) => u.roleKey === 'instructor') },
-        { icon: 'award' as IconName, label: 'Sertifikat Terbit', value: db.count('certificates') },
-      ];
-      return (
-        <section className="mx-auto max-w-7xl px-4 py-8 sm:px-6">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            {items.map((it, i) => (
-              <Reveal key={it.label} delay={i * 70}>
-                <div className="card card-hover flex items-center gap-3.5 p-4">
-                  <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-500/12 text-brand-500"><Icon name={it.icon} size={20} /></span>
-                  <div>
-                    <p className="font-display text-xl font-bold text-base-900 dark:text-base-50 tabular-nums">{it.value}</p>
-                    <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{it.label}</p>
-                  </div>
-                </div>
-              </Reveal>
-            ))}
-          </div>
-        </section>
-      );
-    }
+    case 'stats': return <StatsBlock />;
     case 'featured_courses':
     case 'latest_courses':
-    case 'free_courses': {
-      let list = CourseService.published();
-      if (block.type === 'featured_courses') list = list.filter((c) => c.featured);
-      if (block.type === 'free_courses') list = list.filter((c) => c.isFree);
-      if (block.type === 'latest_courses') list = list.sort((a, b) => b.createdAt - a.createdAt);
-      if (list.length === 0) return null;
-      return (
-        <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
-          <SectionHead title={s.title || 'Kelas'} sub={s.sub} to="/courses" />
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {list.slice(0, 6).map((c, i) => <CourseCard key={c.id} course={c} delay={i * 60} />)}
-          </div>
-        </section>
-      );
-    }
-    case 'categories': {
-      const cats = CategoryService.byScope('course');
-      if (cats.length === 0) return null;
-      return (
-        <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
-          <SectionHead title={s.title || 'Kategori'} to="/courses" />
-          <div className="flex flex-wrap gap-2.5">
-            {cats.map((c, i) => (
-              <Reveal key={c.id} delay={i * 40}>
-                <Link to={`/courses?cat=${c.id}`} className="card card-hover flex items-center gap-2.5 px-4 py-2.5 text-sm font-bold text-base-700 dark:text-base-200">
-                  <Icon name="tag" size={14} className="text-brand-500" />{c.name}
-                  <span className="font-mono text-[10px] text-base-400">{db.count('courses', (x) => x.categoryId === c.id && x.status === 'published')}</span>
-                </Link>
-              </Reveal>
-            ))}
-          </div>
-        </section>
-      );
-    }
-    case 'instructors': {
-      const instructors = db.where('users', (u) => u.roleKey === 'instructor' && u.instructorApproved === true);
-      if (instructors.length === 0) return null;
-      return (
-        <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
-          <SectionHead title={s.title || 'Instructor'} sub={s.sub} />
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            {instructors.slice(0, 4).map((u, i) => (
-              <Reveal key={u.id} delay={i * 60}>
-                <div className="card card-hover p-5 text-center">
-                  <Avatar name={u.name} src={u.avatar} size={64} />
-                  <p className="mt-3 font-display text-sm font-bold text-base-900 dark:text-base-50">{u.name}</p>
-                  <p className="mt-0.5 line-clamp-1 text-xs text-base-400">{u.instructorHeadline || 'Instructor'}</p>
-                  <p className="mt-2 font-mono text-[10px] uppercase tracking-widest text-brand-500">{db.count('courses', (c) => c.instructorId === u.id && c.status === 'published')} kelas</p>
-                </div>
-              </Reveal>
-            ))}
-          </div>
-        </section>
-      );
-    }
+    case 'free_courses': return <CoursesBlock block={block} />;
+    case 'categories': return <CategoriesBlock block={block} />;
+    case 'instructors': return <InstructorsBlock />;
     case 'articles':
     case 'news':
     case 'tutorials':
-    case 'activities': {
-      const table = block.type;
-      const rows = db.where(table, (r) => (r as { status?: string }).status === 'published')
-        .sort((a, b) => ((b as { publishedAt?: number | null }).publishedAt ?? b.createdAt) - ((a as { publishedAt?: number | null }).publishedAt ?? a.createdAt));
-      if (rows.length === 0) return null;
-      const conf = {
-        articles: { to: '/articles', icon: 'file-text' as IconName },
-        news: { to: '/news', icon: 'news' as IconName },
-        tutorials: { to: '/tutorials', icon: 'book-open' as IconName },
-        activities: { to: '/activities', icon: 'calendar' as IconName },
-      }[table];
-      return (
-        <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
-          <SectionHead title={s.title || table} to={conf.to} />
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {rows.slice(0, 3).map((r, i) => {
-              const row = r as unknown as Article & Activity;
-              return (
-                <Reveal key={r.id} delay={i * 60}>
-                  <Link to={`${conf.to}/${row.slug}`} className="card card-hover group block overflow-hidden">
-                    <SafeImg src={row.thumbnail} alt={row.title} label={row.title} className="aspect-video w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
-                    <div className="p-4">
-                      <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{fmtDate(row.publishedAt ?? r.createdAt)}</p>
-                      <h3 className="mt-1 font-display text-[15px] font-bold leading-snug text-base-900 dark:text-base-50 line-clamp-2 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">{row.title}</h3>
-                      <p className="mt-1.5 text-xs leading-5 text-base-500 dark:text-base-400 line-clamp-2">{row.excerpt ?? row.description}</p>
-                    </div>
-                  </Link>
-                </Reveal>
-              );
-            })}
-          </div>
-        </section>
-      );
-    }
+    case 'activities': return <ContentSectionBlock block={block} />;
     case 'cta':
       return (
         <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
           <Reveal>
-            <div className="relative overflow-hidden rounded-2xl bg-base-900 dark:bg-base-850 border border-base-800 px-6 py-12 text-center sm:px-12">
+            <div className="surface-cta relative overflow-hidden rounded-2xl border border-base-800 px-6 py-12 text-center sm:px-12">
               <div className="absolute inset-0 grid-bg opacity-40" />
               <div className="absolute -top-20 left-1/3 h-64 w-64 rounded-full bg-brand-500/15 blur-3xl" />
               <div className="relative">
-                <h2 className="font-display text-2xl sm:text-3xl font-bold text-base-50">{s.title}</h2>
-                <p className="mx-auto mt-2 max-w-md text-sm text-base-300">{s.sub}</p>
+                <h2 className="font-display text-2xl sm:text-3xl font-bold">{s.title}</h2>
+                <p className="mx-auto mt-2 max-w-md text-sm opacity-80">{s.sub}</p>
                 <Link to="/courses" className="btn-primary mt-6 inline-flex">{s.button_label || 'Lihat Semua Kelas'} <Icon name="arrow-right" size={15} /></Link>
               </div>
             </div>
@@ -361,7 +366,6 @@ type ContentRow = { id: ID; title: string; slug: string; excerpt?: string; descr
 function ContentListPage({ table, title, icon, detailPath, showVideo }: {
   table: 'articles' | 'news' | 'tutorials' | 'activities'; title: string; icon: IconName; detailPath: string; showVideo?: boolean;
 }) {
-  useDB();
   const [params, setParams] = useSearchParams();
   const [remoteRows, setRemoteRows] = useState<ContentRow[]>([]);
   const q = params.get('q') ?? '';
@@ -371,7 +375,9 @@ function ContentListPage({ table, title, icon, detailPath, showVideo }: {
     .sort((a, b) => (b.publishedAt ?? b.createdAt) - (a.publishedAt ?? a.createdAt))
     .filter((r) => (!q || r.title.toLowerCase().includes(q.toLowerCase()) || (r.excerpt ?? '').toLowerCase().includes(q.toLowerCase())) && (!cat || r.categoryId === cat));
   const scope = table === 'articles' ? 'article' : table === 'tutorials' ? 'tutorial' : 'news';
-  const cats = CategoryService.byScope(scope);
+  const [cats, setCats] = useState<Array<{ id: string; name: string }>>([]);
+  useEffect(() => { void api.categories(scope).then(setCats).catch(() => setCats([])); }, [scope]);
+  const catName = (id: string | null) => cats.find((c) => c.id === id)?.name ?? '';
   return (
     <PublicShell>
       <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
@@ -406,7 +412,7 @@ function ContentListPage({ table, title, icon, detailPath, showVideo }: {
                     )}
                   </div>
                   <div className="p-4">
-                    <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{CategoryService.name(r.categoryId)} · {fmtDate(r.publishedAt ?? r.createdAt)}</p>
+                    <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{catName(r.categoryId)} · {fmtDate(r.publishedAt ?? r.createdAt)}</p>
                     <h3 className="mt-1.5 font-display text-[15px] font-bold leading-snug text-base-900 dark:text-base-50 line-clamp-2 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">{r.title}</h3>
                     <p className="mt-1.5 text-xs leading-5 text-base-500 dark:text-base-400 line-clamp-2">{r.excerpt ?? r.description}</p>
                   </div>
@@ -421,17 +427,20 @@ function ContentListPage({ table, title, icon, detailPath, showVideo }: {
 }
 
 function ContentDetailPage({ table, detailPath }: { table: 'articles' | 'news' | 'tutorials' | 'activities'; detailPath: string }) {
-  useDB();
   const { slug } = useParams();
   const [row, setRow] = useState<ContentRow | null>(null);
   const [related, setRelated] = useState<ContentRow[]>([]);
+  const [cats, setCats] = useState<Array<{ id: string; name: string }>>([]);
   useEffect(() => {
     if (!slug) return;
     void Promise.all([api.contentDetail(table, slug), api.content(table)]).then(([detail, items]) => {
       const current = detail as ContentRow;
       setRow(current); setRelated((items as ContentRow[]).filter((item) => item.id !== current.id).slice(0, 3));
     }).catch(() => { setRow(null); setRelated([]); });
+    const scope = table === 'articles' ? 'article' : table === 'tutorials' ? 'tutorial' : 'news';
+    void api.categories(scope).then(setCats).catch(() => setCats([]));
   }, [table, slug]);
+  const catName = (id: string | null) => cats.find((c) => c.id === id)?.name ?? '';
   if (!row) {
     return (
       <PublicShell>
@@ -447,7 +456,7 @@ function ContentDetailPage({ table, detailPath }: { table: 'articles' | 'news' |
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-base-500 anim-rise">
           <span className="flex items-center gap-2"><Avatar name={row.authorName || '?'} size={26} /> <b className="text-base-700 dark:text-base-200">{row.authorName || '—'}</b></span>
           <span className="font-mono text-xs text-base-400">{fmtDate(row.publishedAt ?? row.createdAt)}</span>
-          <Badge tone="brand">{CategoryService.name(row.categoryId)}</Badge>
+          <Badge tone="brand">{catName(row.categoryId)}</Badge>
         </div>
         {table === 'activities' && (row.eventDate || row.location) && (
           <div className="mt-5 grid gap-3 rounded-xl border border-brand-500/25 bg-brand-500/[0.06] p-4 sm:grid-cols-3 anim-rise">
@@ -606,7 +615,7 @@ export function ContactPage() {
               { icon: 'chat' as IconName, label: 'WhatsApp', value: `+${getSetting('whatsapp')}` },
             ].map((c) => (
               <div key={c.label} className="card card-hover flex items-start gap-3.5 p-4">
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-500/12 text-brand-500"><Icon name={c.icon} size={18} /></span>
+                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${iconToneBg(c.icon)} ${iconTone(c.icon)}`}><Icon name={c.icon} size={18} /></span>
                 <div><p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{c.label}</p><p className="mt-0.5 text-sm font-semibold text-base-800 dark:text-base-100">{c.value || '—'}</p></div>
               </div>
             ))}
@@ -691,7 +700,6 @@ function VariantModal({ product, onClose, onAdded }: { product: Product; onClose
 }
 
 export function ShopPage() {
-  useDB();
   const { user, toast, t } = useApp();
   const nav = useNavigate();
   const [cartOpen, setCartOpen] = useState(false);
@@ -703,18 +711,21 @@ export function ShopPage() {
   const [voucherErr, setVoucherErr] = useState('');
   const [ship, setShip] = useState({ name: user?.name ?? '', address: '', phone: user?.phone ?? '' });
   const [busy, setBusy] = useState(false);
-  const [productsFromApi, setProductsFromApi] = useState<Product[]>([]);
+  const [page, setPage] = useState(1);
   const [cartFromApi, setCartFromApi] = useState<ApiCart>({ items: [], subtotal: 0, count: 0, hasPhysical: false, hasDigital: false });
+  const { categories } = useApp();
+  const cats = categories.filter((c) => c.scope === 'product');
+  useEffect(() => { setPage(1); }, [cat, kind]);
+  const productPage = useRemote(() => api.productPage({ page, category_id: cat, kind: kind === 'all' ? '' : kind }), [page, cat, kind]);
 
+  // Cart state is always re-read from the server; the header badge listens for the same event.
   const refreshShop = () => {
-    void api.products().then(setProductsFromApi).catch(() => setProductsFromApi([]));
+    productPage.reload();
     if (user) void api.cart().then(setCartFromApi).catch(() => setCartFromApi({ items: [], subtotal: 0, count: 0, hasPhysical: false, hasDigital: false }));
+    window.dispatchEvent(new Event(CART_CHANGED_EVENT));
   };
-  useEffect(refreshShop, [user]);
-
-  const products = productsFromApi.filter((p) =>
-    (!cat || p.categoryId === cat) && (kind === 'all' || (kind === 'digital' ? p.isDigital : !p.isDigital)));
-  const cats = CategoryService.byScope('product');
+  useEffect(() => { if (user) void api.cart().then(setCartFromApi).catch(() => undefined); }, [user?.id]);
+  const products = productPage.data?.items ?? [];
   const cart = cartFromApi;
 
   const applyVoucher = () => {
@@ -731,7 +742,7 @@ export function ShopPage() {
     setBusy(true);
     api.createShopOrder({ voucher_code: appliedVoucher?.code ?? '', shipping: cart.hasPhysical ? ship : undefined }).then((response) => {
       const order = (response as { order: { id: string } }).order;
-      setCartOpen(false); setAppliedVoucher(null); setVoucherCode(''); nav(`/checkout/${order.id}`);
+      setCartOpen(false); setAppliedVoucher(null); setVoucherCode(''); window.dispatchEvent(new Event(CART_CHANGED_EVENT)); nav(`/checkout/${order.id}`);
     }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal checkout.')).finally(() => setBusy(false));
   };
 
@@ -764,7 +775,11 @@ export function ShopPage() {
               className={`badge cursor-pointer transition-colors ${cat === c.id ? 'bg-brand-500 text-base-950' : 'bg-base-100 dark:bg-base-800 text-base-500 hover:text-brand-500'}`}>{c.name}</button>
           ))}
         </div>
-        {products.length === 0 ? (
+        {productPage.status === 'error' || productPage.status === 'forbidden' ? (
+          <EmptyState icon="alert-triangle" title="Gagal memuat produk" sub={productPage.error} action={<button className="btn-primary" onClick={productPage.reload}>Coba lagi</button>} />
+        ) : productPage.data === null ? (
+          <p className="py-14 text-center text-sm text-base-400">Memuat produk…</p>
+        ) : products.length === 0 ? (
           <EmptyState icon="bag" title="Belum ada produk" sub="Produk yang dipublikasikan dari dashboard toko akan tampil di sini." />
         ) : (
           <div className="grid gap-5 grid-cols-2 lg:grid-cols-4">
@@ -806,9 +821,10 @@ export function ShopPage() {
             })}
           </div>
         )}
+        {productPage.data && productPage.data.lastPage > 1 && <div className="card mt-6"><Pager page={productPage.data} onPage={setPage} /></div>}
       </div>
 
-      {variantFor && <VariantModal product={variantFor} onClose={() => setVariantFor(null)} onAdded={() => setCartOpen(true)} />}
+      {variantFor && <VariantModal product={variantFor} onClose={() => setVariantFor(null)} onAdded={() => { refreshShop(); setCartOpen(true); }} />}
 
       {cartOpen && (
         <div className="fixed inset-0 z-[85]">

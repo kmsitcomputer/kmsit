@@ -29,8 +29,14 @@
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
+        <env name="SESSION_ENCRYPT" value="false"/>
+        <!-- Non-UTC like the production template, so timezone bugs surface in tests; never read from .env. -->
+        <env name="APP_TIMEZONE" value="Asia/Jakarta"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="NIGHTWATCH_ENABLED" value="false"/>
+        <!-- Tripay webhook configuration for signature verification -->
+        <env name="TRIPAY_PRIVATE_KEY" value="test-callback-secret"/>
+        <env name="PAYMENT_MODE" value="sandbox"/>
     </php>
 </phpunit>

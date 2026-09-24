@@ -10,7 +10,7 @@ class AppNotification extends Model
     protected $table = 'notifications';
     public $incrementing = false;
     protected $keyType = 'string';
-    protected $fillable = ['id', 'user_id', 'title', 'body', 'link', 'kind', 'is_read'];
+    protected $fillable = ['id', 'user_id', 'event_key', 'title', 'body', 'link', 'kind', 'is_read'];
     protected function casts(): array { return ['is_read' => 'boolean']; }
     public function user(): BelongsTo { return $this->belongsTo(User::class); }
 }

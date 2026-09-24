@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type InputHTMLAttributes, type TextareaHTMLAttributes, type SelectHTMLAttributes } from 'react';
-import { db, type Row, type ID } from '../lib/db';
-import { sanitizeHtml, youtubeId } from '../lib/services';
+import type { Row } from '../lib/types';
+import { sanitizeHtml, youtubeId } from '../lib/format';
 import { api, type ApiMedia } from '../lib/api';
+import type { Page } from '../lib/pagination';
 import { useApp } from '../state/store';
 import { Icon, type IconName } from './icons';
 
@@ -87,6 +88,34 @@ export function Toggle({ checked, onChange, label }: { checked: boolean; onChang
       </span>
       {label && <span className="text-sm text-base-700 dark:text-base-300 group-hover:text-base-900 dark:group-hover:text-base-100">{label}</span>}
     </button>
+  );
+}
+
+export function ColorField({ label, value, onChange, opacity, onOpacityChange, hint }: {
+  label: string; value: string; onChange: (hex: string) => void;
+  opacity?: number; onOpacityChange?: (pct: number) => void; hint?: string;
+}) {
+  const hex = /^#[0-9a-fA-F]{6}$/.test(value) ? value : '#8d9bb8';
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <div className="flex items-center gap-2">
+        <label className="relative h-9 w-9 shrink-0 cursor-pointer overflow-hidden rounded-lg border border-base-300 dark:border-base-700 bg-[repeating-conic-gradient(#e2e8f0_0%_25%,transparent_0%_50%)] bg-[length:10px_10px] dark:bg-[repeating-conic-gradient(#334155_0%_25%,transparent_0%_50%)]">
+          <span className="absolute inset-0" style={value ? { background: value } : undefined} />
+          <input type="color" value={hex} onChange={(e) => onChange(e.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" aria-label={label} />
+        </label>
+        <TextInput value={value} onChange={(e) => onChange(e.target.value)} placeholder="kosong = default" className="font-mono text-xs" />
+        {value && <button type="button" className="btn-ghost btn-sm shrink-0" onClick={() => onChange('')} title="Reset ke default"><Icon name="x" size={12} /></button>}
+      </div>
+      {onOpacityChange && (
+        <div className="mt-2 flex items-center gap-2">
+          <span className="shrink-0 text-[10px] font-mono uppercase text-base-400">Transparansi</span>
+          <input type="range" min={40} max={95} value={opacity ?? 85} onChange={(e) => onOpacityChange(Number(e.target.value))} className="flex-1 accent-brand-500" />
+          <span className="w-9 shrink-0 text-right text-[10px] font-mono text-base-400">{opacity ?? 85}%</span>
+        </div>
+      )}
+      {hint && <p className="mt-1 text-[11px] text-base-400">{hint}</p>}
+    </div>
   );
 }
 
@@ -365,16 +394,20 @@ export function ToastHost() {
 export function MediaPicker({ open, onClose, onPick }: { open: boolean; onClose: () => void; onPick: (url: string) => void }) {
   const { user, toast } = useApp();
   const [busy, setBusy] = useState(false);
-  const [items, setItems] = useState<ApiMedia[]>([]);
+  const [page, setPage] = useState(1);
+  const [data, setData] = useState<Page<ApiMedia> | null>(null);
+  const [error, setError] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (open && user) void api.media().then(setItems).catch(() => setItems([])); }, [open, user]);
+  const load = (n: number) => { void api.media({ page: n, per_page: 24 }).then((p) => { setData(p); setError(''); }).catch((err) => { setData(null); setError(err instanceof Error ? err.message : 'Gagal memuat media.'); }); };
+  useEffect(() => { if (open && user) load(page); }, [open, user, page]);
+  const items = data?.items ?? [];
 
   const upload = async (f: File) => {
     setBusy(true);
     try {
       const response = await api.uploadMedia(f) as { url: string };
       toast('success', 'Media terunggah.'); onPick(response.url); onClose();
-      void api.media().then(setItems);
+      setPage(1); load(1);
     } catch (error) { toast('error', error instanceof Error ? error.message : 'Gagal mengunggah media.'); }
     finally { setBusy(false); }
   };
@@ -384,12 +417,14 @@ export function MediaPicker({ open, onClose, onPick }: { open: boolean; onClose:
       <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ''; }} />
       <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-xs text-base-400 font-mono">{items.length} file</p>
+        <p className="text-xs text-base-400 font-mono">{data ? `${data.total} file` : ''}</p>
         <button className="btn-primary btn-sm" onClick={() => fileRef.current?.click()} disabled={busy}>
           <Icon name="upload" size={13} /> {busy ? 'Mengunggah…' : 'Unggah File'}
         </button>
       </div>
-      {items.length === 0 ? (
+      {error ? (
+        <EmptyState icon="alert-triangle" title="Gagal memuat media" sub={error} />
+      ) : items.length === 0 ? (
         <EmptyState icon="image" title="Belum ada media" sub="Unggah gambar atau PDF pertamamu." />
       ) : (
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
@@ -404,6 +439,15 @@ export function MediaPicker({ open, onClose, onPick }: { open: boolean; onClose:
               <span className="absolute inset-x-0 bottom-0 truncate bg-base-950/75 px-1.5 py-1 text-[9px] font-mono text-base-100 opacity-0 transition-opacity group-hover:opacity-100">{m.name}</span>
             </button>
           ))}
+        </div>
+      )}
+      {data && data.lastPage > 1 && (
+        <div className="mt-3 flex items-center justify-between text-xs text-base-400">
+          <span>{data.page} / {data.lastPage}</span>
+          <div className="flex gap-2">
+            <button className="btn-ghost btn-sm" disabled={data.page <= 1} onClick={() => setPage(data.page - 1)}>‹</button>
+            <button className="btn-ghost btn-sm" disabled={data.page >= data.lastPage} onClick={() => setPage(data.page + 1)}>›</button>
+          </div>
         </div>
       )}
     </Modal>

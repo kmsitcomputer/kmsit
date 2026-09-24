@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { db, type Course, type Lesson, type Quiz, type ID, type GatewayKey, type Order } from '../../lib/db';
-import { api } from '../../lib/api';
-import { fmtMoney, youtubeId } from '../../lib/services';
-import { CourseService, CategoryService, CurriculumService, EnrollmentService, ProgressService, QuizService, CertificateService, canViewLesson, EnrollmentError } from '../../lib/lms';
-import { OrderService, PaymentService, GATEWAYS, activeGateway, gatewayMode } from '../../lib/commerce';
-import { useApp, useDB } from '../../state/store';
+import type { Course, Lesson, Quiz, ID, Order, Question } from '../../lib/types';
+import { api, type ApiCertificate, type ApiCourseDetail, type LearningStatus } from '../../lib/api';
+import { coursePrice, fmtMoney, youtubeId } from '../../lib/format';
+import { useApp } from '../../state/store';
+import { Pager, RemoteView, useRemote } from '../../components/remote';
 import { Icon } from '../../components/icons';
 import { Badge, Donut, EmptyState, Modal, RichHTML, SafeImg, Select, Spinner, StatusBadge, YouTube } from '../../components/ui';
 import { PublicShell } from '../../components/Shell';
@@ -15,27 +14,21 @@ import { CertificateModal } from './Certificates';
 /* ================= catalog ================= */
 
 export function CoursesCatalog() {
-  useDB();
-  const [remoteCourses, setRemoteCourses] = useState<Course[]>([]);
+  const { categories } = useApp();
   const [params, setParams] = useSearchParams();
   const q = params.get('q') ?? '';
   const cat = params.get('cat') ?? '';
   const level = params.get('level') ?? '';
   const type = params.get('type') ?? '';
   const sort = params.get('sort') ?? 'latest';
-
-  useEffect(() => { void api.courses(q).then(setRemoteCourses).catch(() => setRemoteCourses([])); }, [q]);
-
-  let list = remoteCourses
-    .filter((c) => (!q || c.title.toLowerCase().includes(q.toLowerCase()) || c.shortDescription.toLowerCase().includes(q.toLowerCase()) || c.tags.some((t) => t.toLowerCase().includes(q.toLowerCase())))
-      && (!cat || c.categoryId === cat) && (!level || c.level === level)
-      && (!type || (type === 'free' ? c.isFree : !c.isFree)));
-  list = [...list].sort((a, b) => sort === 'popular' ? CourseService.studentsCount(b.id) - CourseService.studentsCount(a.id)
-    : sort === 'price_asc' ? CourseService.effectivePrice(a) - CourseService.effectivePrice(b)
-    : sort === 'price_desc' ? CourseService.effectivePrice(b) - CourseService.effectivePrice(a)
-    : b.createdAt - a.createdAt);
-
+  const [term, setTerm] = useState(q);
+  const [page, setPage] = useState(1);
   const set = (k: string, v: string) => setParams((p) => { if (v) p.set(k, v); else p.delete(k); return p; }, { replace: true });
+  // Debounced so typing does not fire one request per keystroke.
+  useEffect(() => { const timer = window.setTimeout(() => { if (term !== q) set('q', term); }, 300); return () => window.clearTimeout(timer); }, [term]);
+  useEffect(() => { setPage(1); }, [q, cat, level, type, sort]);
+  const courses = useRemote(() => api.coursePage({ page, search: q, category_id: cat, level, type, sort }), [page, q, cat, level, type, sort]);
+  const filtered = !!(q || cat || level || type);
 
   return (
     <PublicShell>
@@ -43,16 +36,16 @@ export function CoursesCatalog() {
         <div className="mb-8 anim-rise">
           <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-brand-500 flex items-center gap-2"><Icon name="book" size={14} /> Katalog</p>
           <h1 className="mt-2 font-display text-3xl font-bold text-base-900 dark:text-base-50">Kelas Online</h1>
-          <p className="mt-1 text-sm text-base-500 dark:text-base-400">{list.length} kelas tersedia — gratis & berbayar dengan sertifikat digital.</p>
+          <p className="mt-1 text-sm text-base-500 dark:text-base-400">{courses.data ? `${courses.data.total} kelas tersedia` : 'Memuat kelas'} — gratis & berbayar dengan sertifikat digital.</p>
         </div>
         <div className="mb-6 flex flex-wrap items-center gap-2.5 anim-rise">
           <div className="relative min-w-52 flex-1 sm:max-w-sm">
             <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-400" />
-            <input value={q} onChange={(e) => set('q', e.target.value)} placeholder="Cari kelas, topik, atau tag…" className="input pl-9" />
+            <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Cari kelas atau topik…" className="input pl-9" />
           </div>
           <Select value={cat} onChange={(e) => set('cat', e.target.value)} className="w-auto">
             <option value="">Semua Kategori</option>
-            {CategoryService.byScope('course').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {categories.filter((c) => c.scope === 'course').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
           <Select value={level} onChange={(e) => set('level', e.target.value)} className="w-auto">
             <option value="">Semua Level</option>
@@ -66,14 +59,18 @@ export function CoursesCatalog() {
             <option value="price_asc">Harga Terendah</option><option value="price_desc">Harga Tertinggi</option>
           </Select>
         </div>
-        {list.length === 0 ? (
-          <EmptyState icon="book" title={q || cat || level || type ? 'Tidak ada kelas yang cocok' : 'Belum ada kelas tersedia'}
-            sub={q || cat || level || type ? 'Coba ubah kata kunci atau filter.' : 'Kelas yang dipublikasikan instructor akan tampil di sini.'} />
-        ) : (
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {list.map((c, i) => <CourseCard key={c.id} course={c} delay={(i % 3) * 60} />)}
-          </div>
-        )}
+        <RemoteView remote={courses} isEmpty={(p) => p.total === 0}
+          emptyTitle={filtered ? 'Tidak ada kelas yang cocok' : 'Belum ada kelas tersedia'}
+          emptySub={filtered ? 'Coba ubah kata kunci atau filter.' : 'Kelas yang dipublikasikan instructor akan tampil di sini.'}>
+          {(data) => (
+            <>
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {data.items.map((c, i) => <CourseCard key={c.id} course={c} delay={(i % 3) * 60} />)}
+              </div>
+              {data.lastPage > 1 && <div className="card mt-6"><Pager page={data} onPage={setPage} /></div>}
+            </>
+          )}
+        </RemoteView>
       </div>
     </PublicShell>
   );
@@ -82,17 +79,21 @@ export function CoursesCatalog() {
 /* ================= course detail ================= */
 
 export function CourseDetailPage() {
-  useDB();
   const { slug } = useParams();
-  const { user, toast } = useApp();
+  const { user, toast, categoryName } = useApp();
   const nav = useNavigate();
-  const [remoteDetail, setRemoteDetail] = useState<import('../../lib/api').ApiCourseDetail | null>(null);
-  useEffect(() => { if (slug) void api.course(slug).then(setRemoteDetail).catch(() => setRemoteDetail(null)); }, [slug]);
+  const [remoteDetail, setRemoteDetail] = useState<ApiCourseDetail | null>(null);
+  const [status, setStatus] = useState<LearningStatus | null>(null);
+  useEffect(() => { if (slug) void api.course(slug).then(setRemoteDetail).catch(() => setRemoteDetail(null)); }, [slug, user?.id]);
   const course = remoteDetail?.course;
+  useEffect(() => {
+    if (user && course?.id && remoteDetail?.enrolled) void api.learningStatus(course.id).then(setStatus).catch(() => setStatus(null));
+    else setStatus(null);
+  }, [user?.id, course?.id, remoteDetail?.enrolled]);
   const [previewLesson, setPreviewLesson] = useState<Lesson | null>(null);
   const [busy, setBusy] = useState(false);
   const [openSection, setOpenSection] = useState<string | null>(null);
-  const [certOpenId, setCertOpenId] = useState<string | null>(null);
+  const [certOpen, setCertOpen] = useState<ApiCertificate | null>(null);
 
   if (!course) {
     return <PublicShell><div className="mx-auto max-w-2xl px-4 py-24"><EmptyState icon="alert-circle" title="Kelas tidak ditemukan" action={<Link to="/courses" className="btn-primary">Lihat Katalog</Link>} /></div></PublicShell>;
@@ -104,14 +105,14 @@ export function CourseDetailPage() {
   }
 
   const enrolled = user ? (remoteDetail?.enrolled ?? false) : false;
-  const prog = user && enrolled ? ProgressService.of(user.id, course.id) : null;
-  const price = CourseService.effectivePrice(course);
+  const prog = enrolled ? status?.progress ?? null : null;
+  const price = coursePrice(course);
   const instructor = remoteDetail?.instructor;
   const sections = remoteDetail?.sections ?? [];
   const lessonCount = remoteDetail?.lessonCount ?? 0;
   const duration = remoteDetail?.duration ?? 0;
   const studentsCount = remoteDetail?.studentsCount ?? 0;
-  const cert = user ? CertificateService.activeFor(user.id, course.id) : undefined;
+  const cert = status?.certificate && status.certificate.status === 'issued' ? status.certificate : null;
 
   const enrollFree = () => {
     if (!user) { nav(`/login?next=/courses/${course.slug}`); return; }
@@ -139,7 +140,7 @@ export function CourseDetailPage() {
         <div className="relative mx-auto grid max-w-7xl gap-8 px-4 py-10 sm:px-6 lg:grid-cols-[1.5fr_1fr]">
           <div className="anim-rise">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge tone="brand">{CategoryService.name(course.categoryId)}</Badge>
+              <Badge tone="brand">{course.categoryName ?? (categoryName(course.categoryId) || 'Umum')}</Badge>
               <Badge tone="neutral"><span className="normal-case">{course.level}</span></Badge>
               {course.status !== 'published' && <StatusBadge status={course.status} />}
             </div>
@@ -172,7 +173,7 @@ export function CourseDetailPage() {
                   {enrolled ? (
                     <>
                       <Link to={`/learn/${course.slug}`} className="btn-primary w-full py-3"><Icon name="play" size={16} /> {prog && prog.pct > 0 ? 'Lanjutkan Belajar' : 'Mulai Belajar'}</Link>
-                      {cert && <button onClick={() => setCertOpenId(cert.id)} className="btn-outline w-full"><Icon name="award" size={15} /> Lihat Sertifikat</button>}
+                      {cert && <button onClick={() => setCertOpen(cert)} className="btn-outline w-full"><Icon name="award" size={15} /> Lihat Sertifikat</button>}
                     </>
                   ) : course.isFree ? (
                     <button className="btn-primary w-full py-3" onClick={enrollFree} disabled={busy}>{busy ? <Spinner size={15} /> : <Icon name="check-circle" size={16} />} Daftar Gratis</button>
@@ -222,7 +223,8 @@ export function CourseDetailPage() {
                   {open && (
                     <ul className="pb-2">
                       {lessons.map((l) => {
-                        const viewable = canViewLesson(user, course, l);
+                        // The server only returns content for previews, enrolled students and owners.
+                        const viewable = enrolled || l.preview || isOwner || isStaff;
                         return (
                           <li key={l.id}>
                             <button disabled={!viewable} onClick={() => setPreviewLesson(l)}
@@ -265,8 +267,8 @@ export function CourseDetailPage() {
             </div>
             {instructor?.bio && <p className="mt-3 text-xs leading-5 text-base-500 dark:text-base-400 line-clamp-4">{instructor.bio}</p>}
             <div className="mt-3 grid grid-cols-2 gap-2 text-center">
-              <div className="rounded-lg bg-base-100 dark:bg-base-850 py-2"><p className="font-display font-bold text-base-900 dark:text-base-50">{db.count('courses', (c) => c.instructorId === course.instructorId && c.status === 'published')}</p><p className="font-mono text-[9px] uppercase text-base-400">Kelas</p></div>
-              <div className="rounded-lg bg-base-100 dark:bg-base-850 py-2"><p className="font-display font-bold text-base-900 dark:text-base-50">{db.count('enrollments', (e) => db.byId('courses', e.courseId)?.instructorId === course.instructorId)}</p><p className="font-mono text-[9px] uppercase text-base-400">Student</p></div>
+              <div className="rounded-lg bg-base-100 dark:bg-base-850 py-2"><p className="font-display font-bold text-base-900 dark:text-base-50">{remoteDetail?.instructorStats.courses ?? 0}</p><p className="font-mono text-[9px] uppercase text-base-400">Kelas</p></div>
+              <div className="rounded-lg bg-base-100 dark:bg-base-850 py-2"><p className="font-display font-bold text-base-900 dark:text-base-50">{remoteDetail?.instructorStats.students ?? 0}</p><p className="font-mono text-[9px] uppercase text-base-400">Student</p></div>
             </div>
           </div>
           <RelatedCourses current={course} />
@@ -276,7 +278,7 @@ export function CourseDetailPage() {
       <Modal open={!!previewLesson} onClose={() => setPreviewLesson(null)} title={previewLesson?.title ?? ''} wide>
         {previewLesson && <LessonContent lesson={previewLesson} />}
       </Modal>
-      {certOpenId && <CertificateModal certId={certOpenId} open onClose={() => setCertOpenId(null)} />}
+      {certOpen && <CertificateModal certificate={certOpen} open onClose={() => setCertOpen(null)} />}
     </PublicShell>
   );
 
@@ -284,7 +286,10 @@ export function CourseDetailPage() {
 }
 
 function RelatedCourses({ current }: { current: Course }) {
-  const related = CourseService.published().filter((c) => c.id !== current.id && (c.categoryId === current.categoryId || c.instructorId === current.instructorId)).slice(0, 3);
+  const [related, setRelated] = useState<Course[]>([]);
+  useEffect(() => {
+    void api.courses({ per_page: 3, exclude: current.id, category_id: current.categoryId ?? undefined }).then(setRelated).catch(() => setRelated([]));
+  }, [current.id, current.categoryId]);
   if (related.length === 0) return null;
   return (
     <div className="mt-5">
@@ -295,7 +300,7 @@ function RelatedCourses({ current }: { current: Course }) {
             <SafeImg src={c.thumbnail} alt={c.title} label={c.title} className="h-16 w-24 shrink-0 rounded-lg object-cover" />
             <div className="min-w-0 py-0.5">
               <p className="truncate font-display text-[13px] font-bold text-base-800 dark:text-base-100">{c.title}</p>
-              <p className="mt-1 font-display text-xs font-bold text-brand-600 dark:text-brand-400">{c.isFree ? 'Gratis' : fmtMoney(CourseService.effectivePrice(c))}</p>
+              <p className="mt-1 font-display text-xs font-bold text-brand-600 dark:text-brand-400">{c.isFree ? 'Gratis' : fmtMoney(coursePrice(c))}</p>
             </div>
           </Link>
         ))}
@@ -354,10 +359,11 @@ export function LessonContent({ lesson }: { lesson: Lesson }) {
 
 /* ================= quiz player ================= */
 
-export function QuizPlayer({ quiz, courseId, onClose }: { quiz: Quiz; courseId: ID; onClose: () => void }) {
+export function QuizPlayer({ quiz, onClose, onSubmitted }: { quiz: Quiz; onClose: () => void; onSubmitted?: () => void }) {
   const { user, toast } = useApp();
   const [serverQuiz, setServerQuiz] = useState<Quiz | null>(null);
-  const [serverQuestions, setServerQuestions] = useState<import('../../lib/db').Question[]>([]);
+  const [serverQuestions, setServerQuestions] = useState<Question[]>([]);
+  const [usedAttempts, setUsedAttempts] = useState(0);
   const [phase, setPhase] = useState<'intro' | 'run' | 'result'>('intro');
   const [attemptId, setAttemptId] = useState<ID | null>(null);
   const [answers, setAnswers] = useState<Record<ID, string[]>>({});
@@ -366,7 +372,7 @@ export function QuizPlayer({ quiz, courseId, onClose }: { quiz: Quiz; courseId: 
   const [remaining, setRemaining] = useState(activeQuiz.timeLimitMin * 60);
   const [result, setResult] = useState<{ percent: number; passed: boolean; score: number; maxScore: number } | null>(null);
   const questions = useMemo(() => {
-    let qs = serverQuestions.length > 0 ? serverQuestions : QuizService.questions(activeQuiz.id);
+    let qs = serverQuestions;
     if (activeQuiz.randomize) qs = [...qs].sort(() => Math.random() - 0.5);
     return qs;
   }, [activeQuiz.id, activeQuiz.randomize, phase === 'run', serverQuestions]);
@@ -374,17 +380,21 @@ export function QuizPlayer({ quiz, courseId, onClose }: { quiz: Quiz; courseId: 
 
   useEffect(() => { if (user) void api.quiz(quiz.id).then((response) => { setServerQuiz(response.quiz); setServerQuestions(response.questions); setRemaining(response.quiz.timeLimitMin * 60); }).catch(() => undefined); }, [quiz.id, user]);
 
-  const myAttempts = user ? QuizService.attemptsOf(user.id, quiz.id).filter((a) => a.status === 'submitted') : [];
-  const attemptsLeft = serverQuestions.length > 0 ? -1 : activeQuiz.maxAttempts > 0 ? Math.max(0, activeQuiz.maxAttempts - myAttempts.length) : -1;
+  const loadAttempts = () => { if (user) void api.myQuizAttempts({ quiz_id: quiz.id }).then((page) => setUsedAttempts(page.total)).catch(() => undefined); };
+  useEffect(loadAttempts, [quiz.id, user?.id]);
+  // The server enforces max_attempts on start and submit; this only mirrors it for display.
+  const attemptsLeft = activeQuiz.maxAttempts > 0 ? Math.max(0, activeQuiz.maxAttempts - usedAttempts) : -1;
 
   const submit = async (auto = false) => {
     if (submittedRef.current || !attemptId) return;
     submittedRef.current = true;
     try {
-      const r = serverQuestions.length > 0 ? await api.submitQuiz(attemptId, answers) as { attempt: { percent: number; passed: boolean; score: number; max_score: number } } : { attempt: QuizService.submit(attemptId, answers) };
-      const resultData = r.attempt as any;
-      setResult({ percent: resultData?.percent ?? 0, passed: resultData?.passed ?? false, score: resultData?.score ?? 0, maxScore: resultData?.max_score ?? (resultData as any)?.maxScore ?? 0 });
+      const r = await api.submitQuiz(attemptId, answers) as { attempt: { percent: number; passed: boolean; score: number; max_score: number } };
+      const resultData = r.attempt;
+      setResult({ percent: resultData?.percent ?? 0, passed: resultData?.passed ?? false, score: resultData?.score ?? 0, maxScore: resultData?.max_score ?? 0 });
       setPhase('result');
+      loadAttempts();
+      onSubmitted?.();
       toast(resultData?.passed ? 'success' : 'warning', auto ? 'Waktu habis — jawaban otomatis dikumpulkan.' : resultData?.passed ? `Lulus! Skor ${resultData?.percent}%.` : `Skor ${resultData?.percent}% — belum mencapai batas lulus ${activeQuiz.passingScore}%.`);
     } catch (error) { submittedRef.current = false; toast('error', error instanceof Error ? error.message : 'Gagal mengumpulkan jawaban.'); }
   };
@@ -515,22 +525,32 @@ export function LearnPage() {
   const [remoteDetail, setRemoteDetail] = useState<import('../../lib/api').ApiCourseDetail | null>(null);
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>([]);
   const [remoteQuizzes, setRemoteQuizzes] = useState<Quiz[]>([]);
+  const [status, setStatus] = useState<LearningStatus | null>(null);
   const [currentLessonId, setCurrentLessonId] = useState<ID | null>(null);
-  const [quizOpen, setQuizOpen] = useState(false);
+  const [quizOpen, setQuizOpen] = useState<Quiz | null>(null);
   const [certOpen, setCertOpen] = useState(false);
+  const [claiming, setClaiming] = useState(false);
   const course = remoteDetail?.course;
   useEffect(() => { if (slug) void api.course(slug).then(setRemoteDetail).catch(() => setRemoteDetail(null)); }, [slug]);
   useEffect(() => { if (slug && user) void api.courseProgress(slug).then((progress) => setCompletedLessonIds(progress.completedLessonIds)).catch(() => setCompletedLessonIds([])); }, [slug, user]);
   useEffect(() => { if (course?.id && user && remoteDetail?.enrolled) void api.quizzes(course.id).then(setRemoteQuizzes).catch(() => setRemoteQuizzes([])); }, [course?.id, user, remoteDetail?.enrolled]);
+  const reloadStatus = () => { if (course?.id && user && remoteDetail?.enrolled) void api.learningStatus(course.id).then(setStatus).catch(() => setStatus(null)); };
+  useEffect(reloadStatus, [course?.id, user?.id, remoteDetail?.enrolled]);
 
   const enrolled = !!user && !!course && !!remoteDetail?.enrolled;
   const sections = remoteDetail?.sections ?? [];
   const allLessons = sections.flatMap((section) => section.lessons).filter((lesson) => lesson.status === 'published' || user?.id === course?.instructorId);
   const lesson = allLessons.find((l) => l.id === currentLessonId) ?? allLessons[0] ?? null;
-  const prog = course ? { done: completedLessonIds.length, total: allLessons.length, pct: allLessons.length ? Math.round(completedLessonIds.length / allLessons.length * 100) : 0 } : null;
+  const prog = status?.progress ?? null;
   const quizzes = remoteQuizzes;
-  const cert = user && course ? CertificateService.activeFor(user.id, course.id) : undefined;
-  const eligibility = user && course ? CertificateService.eligibility(user, course.id) : null;
+  const quizPassed = (quizId: string) => !!status?.quizzes.find((row) => row.id === quizId)?.passed;
+  const cert = status?.certificate && status.certificate.status === 'issued' ? status.certificate : null;
+  const claimCertificate = () => {
+    if (!course) return;
+    setClaiming(true);
+    void api.issueCertificate(course.id).then(() => { toast('success', 'Sertifikat diterbitkan.'); reloadStatus(); })
+      .catch((error) => toast('error', error instanceof Error ? error.message : 'Sertifikat belum dapat diterbitkan.')).finally(() => setClaiming(false));
+  };
 
   useEffect(() => {
     if (enrolled && !currentLessonId && allLessons[0]) setCurrentLessonId(allLessons[0].id);
@@ -550,7 +570,7 @@ export function LearnPage() {
           <div className="mt-6 flex justify-center gap-3">
             {!user
               ? <Link to={`/login?next=/learn/${course.slug}`} className="btn-primary">Masuk / Daftar</Link>
-              : <Link to={`/courses/${course.slug}`} className="btn-primary"><Icon name="card" size={15} /> Beli Kelas · {fmtMoney(CourseService.effectivePrice(course))}</Link>}
+              : <Link to={`/courses/${course.slug}`} className="btn-primary"><Icon name="card" size={15} /> Beli Kelas · {fmtMoney(coursePrice(course))}</Link>}
           </div>
         </div>
       </PublicShell>
@@ -600,9 +620,9 @@ export function LearnPage() {
           {quizzes.length > 0 && (
             <div className="border-t border-base-200 dark:border-base-800 p-3">
               {quizzes.map((qz) => {
-                const passed = !!QuizService.passedAttempt(user.id, qz.id);
+                const passed = quizPassed(qz.id);
                 return (
-                  <button key={qz.id} onClick={() => setQuizOpen(true)}
+                  <button key={qz.id} onClick={() => setQuizOpen(qz)}
                     className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-bold transition-colors cursor-pointer ${passed ? 'bg-ok-500/10 text-ok-500' : 'bg-accent-400/10 text-accent-500 hover:bg-accent-400/20'}`}>
                     <Icon name={passed ? 'check-circle' : 'target'} size={16} />
                     <span className="flex-1">{qz.title}</span>
@@ -614,9 +634,16 @@ export function LearnPage() {
           )}
         </aside>
         <main className="min-w-0">
-          {eligibility && !eligibility.ok && prog && prog.pct === 100 && (
+          {status && !cert && status.eligible && (
+            <div className="mb-4 flex items-center gap-3 rounded-xl border border-ok-500/30 bg-ok-500/10 px-4 py-3 anim-rise">
+              <Icon name="award" size={18} className="text-ok-500" />
+              <p className="flex-1 text-sm font-bold text-ok-500">Semua materi & quiz selesai — sertifikatmu siap diterbitkan.</p>
+              <button className="btn-primary btn-sm" disabled={claiming} onClick={claimCertificate}>{claiming ? <Spinner size={13} /> : <Icon name="award" size={13} />} Terbitkan</button>
+            </div>
+          )}
+          {status && !cert && !status.eligible && prog && prog.pct === 100 && (
             <div className="mb-4 flex items-center gap-3 rounded-xl border border-accent-400/30 bg-accent-400/10 px-4 py-3 text-sm font-semibold text-accent-500 anim-rise">
-              <Icon name="info" size={17} /> {eligibility.reason}
+              <Icon name="info" size={17} /> Semua quiz aktif harus lulus sebelum sertifikat terbit.
             </div>
           )}
           {cert && (
@@ -642,10 +669,11 @@ export function LearnPage() {
                     if (wasDone) { toast('info', 'Materi ini sudah selesai.'); return; }
                     void api.completeLesson(course.slug, lesson.id).then((response: any) => {
                       setCompletedLessonIds((ids) => ids.includes(lesson.id) ? ids : [...ids, lesson.id]);
+                      reloadStatus();
                       toast('success', response?.enrollment?.status === 'completed' ? 'Course selesai. Selamat!' : 'Materi ditandai selesai.');
                     }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan progress.'));
                   }}>
-                  <Icon name={done(lesson.id) ? 'refresh' : 'check-circle'} size={14} /> {done(lesson.id) ? 'Batalkan Selesai' : 'Tandai Selesai'}
+                  <Icon name="check-circle" size={14} /> {done(lesson.id) ? 'Sudah Selesai' : 'Tandai Selesai'}
                 </button>
                 <button className="btn-primary btn-sm" disabled={idx >= allLessons.length - 1} onClick={() => setCurrentLessonId(allLessons[idx + 1].id)}>Lanjut <Icon name="arrow-right" size={13} /></button>
               </div>
@@ -655,64 +683,89 @@ export function LearnPage() {
           )}
         </main>
       </div>
-      {quizOpen && quizzes.length > 0 && <QuizPlayer quiz={quizzes[0]} courseId={course.id} onClose={() => setQuizOpen(false)} />}
-      {certOpen && cert && <CertificateModal certId={cert.id} open onClose={() => setCertOpen(false)} />}
+      {quizOpen && <QuizPlayer quiz={quizOpen} onClose={() => setQuizOpen(null)} onSubmitted={reloadStatus} />}
+      {certOpen && cert && <CertificateModal certificate={cert} open onClose={() => setCertOpen(false)} />}
     </div>
   );
 }
 
 /* ================= checkout / payment ================= */
 
+const FINAL_ORDER_STATES = ['paid', 'failed', 'expired', 'cancelled'];
+
 export function CheckoutPage() {
-  useDB();
   const { orderId } = useParams();
   const { user, toast } = useApp();
   const nav = useNavigate();
   const [order, setOrder] = useState<Order | null>(null);
-  const [gwKey, setGwKey] = useState<GatewayKey>(activeGateway().key);
+  const [loaded, setLoaded] = useState(false);
   const [method, setMethod] = useState('');
   const [stage, setStage] = useState<'method' | 'processing' | 'success' | 'failed'>('method');
   const [payRef, setPayRef] = useState('');
+  const [busy, setBusy] = useState(false);
+  // Provider, mode and methods come from the server; the buyer only picks a method.
+  const options = useRemote(() => api.paymentOptions(), [user?.id]);
 
   useEffect(() => {
-    if (user && orderId) api.order(orderId).then(setOrder).catch(() => setOrder(null));
+    if (user && orderId) api.order(orderId).then(setOrder).catch(() => setOrder(null)).finally(() => setLoaded(true));
   }, [orderId, user]);
 
+  // While waiting for the provider webhook, poll the server order (every 5 s, up to 10 minutes).
+  useEffect(() => {
+    if (stage !== 'processing' || !orderId) return;
+    let ticks = 0;
+    const timer = window.setInterval(() => {
+      ticks += 1;
+      void api.order(orderId).then((fresh) => {
+        setOrder(fresh);
+        if (fresh.status === 'paid') { setStage('success'); window.clearInterval(timer); }
+        else if (FINAL_ORDER_STATES.includes(fresh.status)) { setStage('failed'); window.clearInterval(timer); }
+      }).catch(() => undefined);
+      if (ticks >= 120) window.clearInterval(timer);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [stage, orderId]);
+
+  if (!loaded && user) {
+    return <PublicShell><div className="flex justify-center py-24"><Spinner size={28} /></div></PublicShell>;
+  }
   if (!order || (user && order.userId !== user.id)) {
     return <PublicShell><div className="mx-auto max-w-xl px-4 py-24"><EmptyState icon="receipt" title="Order tidak ditemukan" action={<Link to="/" className="btn-primary">Ke Beranda</Link>} /></div></PublicShell>;
   }
-  if (order.status === 'paid') {
+  if (order.status === 'paid' && stage !== 'success') {
     return (
       <PublicShell>
         <div className="mx-auto max-w-xl px-4 py-20 text-center anim-scale">
           <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-ok-500/15 text-ok-500"><Icon name="check-circle" size={30} /></span>
           <h1 className="mt-5 font-display text-2xl font-bold text-base-900 dark:text-base-50">Order Sudah Dibayar</h1>
           <p className="mt-2 text-sm text-base-500">Transaksi ini telah selesai dan akses sudah diberikan.</p>
-          <Link to={order.type === 'course' ? '/dashboard/my-learning' : '/shop'} className="btn-primary mt-6 inline-flex">{order.type === 'course' ? 'Mulai Belajar' : 'Kembali ke Toko'}</Link>
+          <Link to={order.type === 'course' ? '/dashboard/my-learning' : '/dashboard/digital'} className="btn-primary mt-6 inline-flex">{order.type === 'course' ? 'Mulai Belajar' : 'Produk Saya'}</Link>
         </div>
       </PublicShell>
     );
   }
 
-  const gw = GATEWAYS.find((g) => g.key === gwKey)!;
-  const mode = gatewayMode();
+  const mode = options.data?.mode ?? 'sandbox';
+  const gatewayName = options.data ? options.data.gateway.charAt(0).toUpperCase() + options.data.gateway.slice(1) : '—';
 
   const pay = async () => {
-    if (!order) return;
+    if (!order || !method) return;
+    setBusy(true);
     try {
-      const response = await api.initiatePayment(order.id, gwKey, method) as { payment: { reference: string } };
+      const response = await api.initiatePayment(order.id, method);
       setPayRef(response.payment.reference);
+      if (response.checkout_url) {
+        window.location.href = response.checkout_url;
+        return;
+      }
       setStage('processing');
       toast('info', 'Payment dibuat. Menunggu konfirmasi webhook gateway.');
     } catch (error) {
       toast('error', error instanceof Error ? error.message : 'Gagal membuat payment.');
-      setStage('failed');
+    } finally {
+      setBusy(false);
     }
   };
-
-  const payable = Math.max(0, order.subtotal - (order.discountAmount || 0));
-  const chosenMethod = gw.methods.find((m) => m.key === method);
-  const fee = chosenMethod ? (chosenMethod.fee.kind === 'flat' ? chosenMethod.fee.value : Math.round((payable * chosenMethod.fee.value) / 100)) : 0;
 
   return (
     <PublicShell>
@@ -720,7 +773,7 @@ export function CheckoutPage() {
         <Link to="/" className="inline-flex items-center gap-1.5 text-sm font-bold text-base-400 hover:text-brand-500 transition-colors anim-rise"><Icon name="arrow-left" size={14} /> Kembali</Link>
         <h1 className="mt-3 font-display text-2xl font-bold text-base-900 dark:text-base-50 anim-rise">Checkout</h1>
         <p className="mt-1 flex items-center gap-2 text-sm text-base-500 anim-rise">
-          <Badge tone={mode === 'sandbox' ? 'warn' : 'ok'} dot>{mode === 'sandbox' ? 'SANDBOX MODE' : 'LIVE MODE'}</Badge>
+          {options.data && <Badge tone={mode === 'sandbox' ? 'warn' : 'ok'} dot>{mode === 'sandbox' ? 'SANDBOX MODE' : 'LIVE MODE'}</Badge>}
           Pembayaran diproses melalui payment gateway dengan verifikasi webhook.
         </p>
 
@@ -728,33 +781,30 @@ export function CheckoutPage() {
           <div className="card p-6 anim-rise">
             {stage === 'method' && (
               <>
-                <p className="label">1 · Payment Gateway</p>
-                <div className="grid grid-cols-3 gap-2">
-                  {GATEWAYS.map((g) => (
-                    <button key={g.key} onClick={() => { setGwKey(g.key); setMethod(''); }}
-                      className={`rounded-xl border-2 px-3 py-3 text-sm font-bold transition-all cursor-pointer ${gwKey === g.key ? 'border-brand-500 bg-brand-500/10 text-brand-700 dark:text-brand-300' : 'border-base-200 dark:border-base-700 text-base-500 hover:border-base-300 dark:hover:border-base-600'}`}>
-                      {g.name}
-                    </button>
-                  ))}
-                </div>
-                <p className="label mt-6">2 · {`Metode Pembayaran`}</p>
-                <div className="space-y-2">
-                  {gw.methods.map((m) => (
-                    <button key={m.key} onClick={() => setMethod(m.key)}
-                      className={`flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all cursor-pointer ${method === m.key ? 'border-brand-500 bg-brand-500/10' : 'border-base-200 dark:border-base-700 hover:border-brand-500/50'}`}>
-                      <Icon name={m.key.includes('VA') || m.key === 'QRIS' ? 'receipt' : m.key.includes('CARD') || m.key === 'LINK' ? 'card' : 'wallet'} size={18} className={method === m.key ? 'text-brand-500' : 'text-base-400'} />
-                      <span className="flex-1 text-sm font-bold text-base-800 dark:text-base-100">{m.label}</span>
-                      <span className="font-mono text-[10px] text-base-400">+{m.fee.kind === 'flat' ? fmtMoney(m.fee.value) : `${m.fee.value}%`}</span>
-                    </button>
-                  ))}
-                </div>
-                <button className="btn-primary mt-6 w-full py-3" disabled={!method} onClick={() => void pay()}>
-                  <Icon name="card" size={16} /> Bayar {fmtMoney(payable + fee)}
+                <p className="label">Payment Gateway</p>
+                <p className="mb-4 rounded-xl border-2 border-brand-500 bg-brand-500/10 px-4 py-3 text-sm font-bold text-brand-700 dark:text-brand-300">{gatewayName}</p>
+                <p className="label">Metode Pembayaran</p>
+                <RemoteView remote={options} isEmpty={(o) => o.methods.length === 0} emptyTitle="Metode pembayaran belum tersedia">
+                  {(o) => (
+                    <div className="space-y-2">
+                      {o.methods.map((m) => (
+                        <button key={m.key} onClick={() => setMethod(m.key)}
+                          className={`flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3 text-left transition-all cursor-pointer ${method === m.key ? 'border-brand-500 bg-brand-500/10' : 'border-base-200 dark:border-base-700 hover:border-brand-500/50'}`}>
+                          <Icon name={m.key.includes('VA') || m.key === 'QRIS' ? 'receipt' : m.key.includes('CARD') || m.key === 'LINK' ? 'card' : 'wallet'} size={18} className={method === m.key ? 'text-brand-500' : 'text-base-400'} />
+                          <span className="flex-1 text-sm font-bold text-base-800 dark:text-base-100">{m.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </RemoteView>
+                <button className="btn-primary mt-6 w-full py-3" disabled={!method || busy || order.status !== 'pending'} onClick={() => void pay()}>
+                  {busy ? <Spinner size={15} /> : <Icon name="card" size={16} />} Bayar {fmtMoney(order.total)}
                 </button>
-                {mode === 'sandbox' && (
+                {order.status !== 'pending' && <p className="mt-2 text-center text-xs text-danger-500">Order berstatus {order.status} dan tidak dapat dibayar.</p>}
+                {mode === 'sandbox' && options.data && (
                   <div className="mt-3 rounded-xl border border-warn-400/30 bg-warn-400/[0.07] p-3.5">
-                    <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-accent-500">Sandbox Testing</p>
-                    <p className="mt-2 text-[11px] leading-4 text-base-400">Payment sandbox dibuat oleh backend. Status hanya berubah setelah webhook dengan signature terverifikasi, sama seperti production.</p>
+                    <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-accent-500">Sandbox</p>
+                    <p className="mt-2 text-[11px] leading-4 text-base-400">Mode sandbox tidak menghubungi provider. Status hanya berubah setelah webhook dengan signature terverifikasi.</p>
                   </div>
                 )}
               </>
@@ -764,19 +814,19 @@ export function CheckoutPage() {
                 <Spinner size={34} />
                 <p className="mt-5 font-display text-base font-bold text-base-900 dark:text-base-50">Memproses pembayaran…</p>
                 <p className="mt-1 font-mono text-xs text-base-400">{payRef}</p>
-                <p className="mx-auto mt-3 max-w-xs text-xs leading-5 text-base-400">Menunggu callback webhook dari {gw.name}. Jangan tutup halaman ini.</p>
+                <p className="mx-auto mt-3 max-w-xs text-xs leading-5 text-base-400">Menunggu callback webhook dari {gatewayName}. Status diperbarui otomatis.</p>
               </div>
             )}
             {stage === 'success' && (
               <div className="py-10 text-center anim-scale">
                 <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-ok-500/15 text-ok-500"><Icon name="check-circle" size={30} /></span>
                 <p className="mt-4 font-display text-xl font-bold text-base-900 dark:text-base-50">Pembayaran Berhasil!</p>
-                <p className="mt-1 font-mono text-xs text-base-400">{payRef} · signature valid · webhook processed</p>
+                <p className="mt-1 font-mono text-xs text-base-400">{payRef}</p>
                 {order.type === 'course' && <p className="mt-2 text-sm text-base-500">Enrollment aktif — materi kelas sudah terbuka.</p>}
                 <div className="mt-6 flex justify-center gap-2">
                   {order.type === 'course'
-                    ? <button className="btn-primary" onClick={() => { const c = db.byId('courses', order.items[0]?.refId ?? ''); if (c) nav(`/learn/${(c as Course).slug}`); else nav('/dashboard/my-learning'); }}><Icon name="play" size={15} /> Mulai Belajar</button>
-                    : <button className="btn-primary" onClick={() => nav('/shop')}>Kembali ke Toko</button>}
+                    ? <button className="btn-primary" onClick={() => nav('/dashboard/my-learning')}><Icon name="play" size={15} /> Mulai Belajar</button>
+                    : <button className="btn-primary" onClick={() => nav('/dashboard/digital')}>Produk Saya</button>}
                   <Link to="/dashboard/orders" className="btn-outline">Riwayat Order</Link>
                 </div>
               </div>
@@ -785,9 +835,9 @@ export function CheckoutPage() {
               <div className="py-10 text-center anim-scale">
                 <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-danger-500/15 text-danger-500"><Icon name="alert-circle" size={30} /></span>
                 <p className="mt-4 font-display text-xl font-bold text-base-900 dark:text-base-50">Pembayaran Gagal</p>
-                <p className="mt-1 text-sm text-base-500">Webhook mengembalikan status gagal. Akses materi belum diberikan.</p>
+                <p className="mt-1 text-sm text-base-500">Order berstatus {order.status}. Akses belum diberikan.</p>
                 <div className="mt-6 flex justify-center gap-2">
-                  <button className="btn-primary" onClick={() => setStage('method')}><Icon name="refresh" size={15} /> Coba Lagi</button>
+                  {order.status === 'pending' && <button className="btn-primary" onClick={() => setStage('method')}><Icon name="refresh" size={15} /> Coba Lagi</button>}
                   <Link to={`/courses`} className="btn-outline">Kembali</Link>
                 </div>
               </div>
@@ -811,8 +861,7 @@ export function CheckoutPage() {
               {order.discountAmount > 0 && (
                 <p className="flex justify-between font-semibold text-ok-500"><span className="flex items-center gap-1.5"><Icon name="tag" size={12} />Voucher {order.voucherCode}</span><span className="font-mono">−{fmtMoney(order.discountAmount)}</span></p>
               )}
-              <p className="flex justify-between text-base-500"><span>Biaya gateway</span><span className="font-mono">{fmtMoney(fee)}</span></p>
-              <p className="flex justify-between border-t border-base-200 dark:border-base-700 pt-2 font-display text-base font-bold text-base-900 dark:text-base-50"><span>Total</span><span>{fmtMoney(payable + fee)}</span></p>
+              <p className="flex justify-between border-t border-base-200 dark:border-base-700 pt-2 font-display text-base font-bold text-base-900 dark:text-base-50"><span>Total</span><span>{fmtMoney(order.total)}</span></p>
             </div>
             {order.type === 'shop' && (
               order.needsShipping ? (

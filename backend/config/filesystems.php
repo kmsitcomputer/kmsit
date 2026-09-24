@@ -33,7 +33,10 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // Left false: this app never serves the private disk. Enabling it registers a
+            // framework route at the same "/storage/{path}" URI our public media route uses
+            // (routes/web.php), silently shadowing it — see MediaController::serve().
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

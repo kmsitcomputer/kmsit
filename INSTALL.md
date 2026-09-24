@@ -8,7 +8,7 @@ Panduan instalasi production (arsitektur **Laravel + MySQL**) untuk LMS + CMS + 
 
 | Komponen | Minimum |
 |---|---|
-| PHP | **8.2+** |
+| PHP | **8.3+** |
 | Ekstensi PHP | `pdo_mysql`, `openssl`, `mbstring`, `tokenizer`, `xml`, `ctype`, `json`, `fileinfo`, `gd`, `curl`, `bcmath` |
 | Database | **MySQL 8.0+** / MariaDB 10.6+ |
 | Web server | Apache 2.4+ (mod_rewrite) **atau** Nginx |
@@ -16,9 +16,13 @@ Panduan instalasi production (arsitektur **Laravel + MySQL**) untuk LMS + CMS + 
 
 > **Status implementasi saat ini:** repo terbagi dua: `frontend/` (React/Vite) dan `backend/` (Laravel). `npm run build` di dalam `frontend/` membuild ke `frontend/dist/` lalu otomatis menyalinnya (hook `postbuild`, lihat `frontend/scripts/sync-backend-assets.mjs`) ke `backend/public/app.html` + `backend/public/assets/` (membersihkan file asset lama sebelum menyalin yang baru). Domain target lokal/production yang didaftarkan adalah `kmsitcomputer.com`; arahkan domain tersebut ke `backend/public` dan gunakan HTTPS publik sebelum payment live. Jangan mengarahkan domain live ke root repository.
 
+> **Tidak perlu setting `.env` manual.** Installer web (`/install`) menulis `backend/.env` sendiri — generate `APP_KEY`, isi `DB_*` dari form yang Anda isi di browser, dan langsung menjalankan migration. Yang **tetap** perlu disiapkan sebelum upload (karena kebanyakan shared hosting tidak punya Composer/Node di server): jalankan `composer install --no-dev` dan `npm run build` di komputer Anda, lalu upload folder `backend/` **beserta `vendor/`** dan `backend/public/` yang sudah berisi hasil build frontend. Setelah itu cukup: pastikan folder `backend/storage`, `backend/bootstrap/cache`, dan `backend/` sendiri bisa ditulis PHP (writable), buat database MySQL kosong di panel hosting, lalu buka domainnya di browser — wizard `/install` akan menuntun sisanya (test koneksi DB, tulis `.env`, migrasi, buat Super Admin pertama).
+
 ## 2. Upload & Konfigurasi Web Server
 
 ### Build dan backend
+
+Jalankan di komputer development (bukan di server hosting) sebelum upload — `.env`, `APP_KEY`, dan migration akan ditangani otomatis oleh installer web setelah upload, **tidak perlu dijalankan manual di server**:
 
 ```bash
 cd frontend
@@ -26,28 +30,14 @@ npm ci
 npm run build   # build ke dist/ lalu auto-sync ke ../backend/public/ (postbuild hook)
 cd ../backend
 composer install --no-dev --optimize-autoloader
-php artisan key:generate
-php artisan storage:link
-php artisan migrate --force
-php artisan optimize
-# worker production (jalankan sebagai service/ supervisor)
-php artisan queue:work --sleep=3 --tries=3 --timeout=90
 ```
 
-Migration adalah sumber kebenaran database. Jalankan pada MySQL production:
+Hasilnya: `backend/` (lengkap dengan `vendor/`) + `backend/public/app.html` + `backend/public/assets/` siap diupload apa adanya. **Jangan** upload `.env` — biarkan installer yang menulisnya di server.
 
-```bash
-php artisan migrate --force
-php artisan schema:dump --database=mysql --path=database/schema.mysql.sql --without-migration-data
-```
-
-Perintah dump harus dijalankan pada server yang memiliki `DB_*` production valid. `backend/database/schema.sql` yang dibuat dari environment SQLite lokal hanya referensi SQLite, bukan file import MySQL.
-
-Salin variabel production dari `backend/.env.production.example` ke `backend/.env`. Isi secret hanya di server atau secret manager.
+> Jika hosting Anda punya akses shell (VPS/Composer/Node tersedia di server) dan Anda tetap ingin setup manual tanpa wizard: `php artisan key:generate`, `php artisan storage:link`, `php artisan migrate --force`, lalu salin `backend/.env.production.example` ke `backend/.env` dan isi `DB_*` sebelum request pertama. Ini opsional — cara di atas (upload lalu buka `/install`) sudah cukup untuk hosting biasa tanpa akses shell.
 
 1. Upload seluruh project ke server, idealnya **di luar** document root.
-2. Install dependency: `cd backend && composer install --no-dev --optimize-autoloader` lalu `cd ../frontend && npm ci && npm run build`.
-3. **Apache** — arahkan DocumentRoot hanya ke `/public` (melindungi `.env`, migration, dan source):
+2. **Apache** — arahkan DocumentRoot hanya ke `/public` (melindungi `.env`, migration, dan source):
 
 ```apache
 <VirtualHost *:443>
@@ -92,12 +82,13 @@ server {
 }
 ```
 
-5. Izin tulis & storage link:
+5. Izin tulis (di shared hosting biasanya sudah writable secara default oleh akun Anda; di VPS jalankan ini):
 
 ```bash
 chown -R www-data:www-data storage bootstrap/cache
-php artisan storage:link
 ```
+
+`storage:link` dijalankan otomatis oleh installer web — tidak perlu manual.
 
 ## 3. Database — dua cara
 
@@ -115,17 +106,15 @@ FLUSH PRIVILEGES;
 
 Installer akan membuat seluruh tabel otomatis (langkah 6).
 
-### Cara B: impor `database/schema.sql` langsung
+### Cara B: migration via CLI (server dengan akses shell)
 
-File [`database/schema.sql`](database/schema.sql) berisi DDL lengkap (40+ tabel, foreign key, index, unique constraint) **plus** seed struktur: role & permission, template sertifikat, homepage blocks, menu default, dan settings default — **tanpa user demo**.
+Laravel migration adalah satu-satunya sumber skema MySQL. Jalankan dari folder `backend/` setelah `.env` berisi `DB_*` yang benar:
 
 ```bash
-mysql -u root -p < database/schema.sql
-# atau dari dalam mysql:
-mysql> SOURCE /var/www/kmsit-computer/database/schema.sql;
+php artisan migrate --force
 ```
 
-> Jika memakai Cara B, installer tetap wajib dijalankan untuk menulis `.env`, generate `APP_KEY`, membuat **Super Admin pertama**, dan mengunci instalasi.
+> `backend/database/schema.sql` **bukan** file impor MySQL: isinya dump referensi dialek SQLite (tanpa data seed) dan tidak boleh di-`mysql <`/`SOURCE`. Role, permission, dan settings awal dibuat oleh installer; installer tetap wajib dijalankan untuk membuat **Super Admin pertama** dan mengunci instalasi.
 
 ## 4. Menjalankan Installer
 
@@ -145,16 +134,22 @@ mysql> SOURCE /var/www/kmsit-computer/database/schema.sql;
 
 Dashboard → **Pengaturan → Payment Gateway**:
 
-1. Pilih gateway aktif, isi credential (atau via `.env`):
-   - Tripay: `TRIPAY_API_KEY`, `TRIPAY_PRIVATE_KEY`, `TRIPAY_MERCHANT_CODE`
+1. Credential gateway **hanya** dari `.env` server (endpoint settings menolak key secret):
+   - Tripay: `TRIPAY_API_KEY`, `TRIPAY_PRIVATE_KEY`, `TRIPAY_MERCHANT_CODE` (opsional `TRIPAY_WEBHOOK_SECRET`)
    - Xendit: `XENDIT_API_KEY`, `XENDIT_CALLBACK_TOKEN`
    - Stripe: `STRIPE_PUBLISHABLE_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
-2. Pilih mode **Sandbox** untuk uji coba, **Live** untuk production.
+2. Pilih gateway aktif & mode di Dashboard → Pengaturan → Payment Gateway (status `configured` per gateway
+   ditampilkan). Pilihan ini dipakai untuk **payment baru**; perubahan tidak memengaruhi payment/webhook lama.
+   Bila settings belum ada, sistem memakai fallback `PAYMENT_GATEWAY`/`PAYMENT_MODE` dari `.env`.
+   Set `PAYMENT_MODE=live` (atau mode Live di dashboard) agar request benar-benar dikirim ke provider;
+   mode `sandbox` memakai flow simulasi internal (tidak menghubungi provider).
 3. Daftarkan URL callback di dashboard gateway:
 
 ```
-https://kmsit.example.com/api/v1/payments/callback
+https://kmsit.example.com/api/v1/payments/webhook/{gateway}
 ```
+
+Ganti `{gateway}` dengan gateway aktif: `tripay`, `xendit`, atau `stripe`.
 
 Sistem memverifikasi **signature** setiap webhook dan mencatatnya di `webhook_logs` dengan `UNIQUE(payload_hash)` — webhook duplikat **tidak** memproses ulang order/enrollment/saldo (idempotency).
 
@@ -174,7 +169,7 @@ Dashboard → **Toko & Order → Produk**:
 
 ### 5.4 Email, Peta, Identitas
 
-- **Email** (`MAIL_*` di `.env`): welcome, reset password, pembayaran sukses/gagal, enrollment, sertifikat terbit, status withdrawal.
+- **Email** (`MAIL_*` di `.env`): saat ini hanya **reset password** (via queue). Status pembayaran, enrollment, sertifikat, moderasi kelas, dan withdrawal dikirim sebagai **notifikasi in-app** (Dashboard → Notifikasi), bukan email.
 - **Google Maps**: `GOOGLE_MAPS_API_KEY` (opsional) + latitude/longitude/query di Pengaturan → Umum.
 - **Logo & Favicon**: Pengaturan → Umum — unggah logo **dan favicon**; favicon langsung aktif di tab browser setelah disimpan.
 
@@ -194,7 +189,10 @@ Dashboard → **Toko & Order → Produk**:
 - [ ] Webhook gateway terdaftar & teruji (kirim 2x → order/enrollment/saldo tidak ganda)
 - [ ] Uji alur penuh: daftar student → beli kelas berbayar → webhook sukses → enrollment + saldo instructor 85% → quiz lulus → sertifikat → verifikasi publik
 - [ ] Uji alur shop: varian → voucher → bayar → stok varian berkurang; produk digital → license + file terbit
-- [ ] Backup terjadwal (`php artisan schedule:work`) + export dari **Pengaturan → Sistem & Audit**
+- [ ] Cron `* * * * * php artisan schedule:run` aktif (reclaim voucher, heartbeat, dan worker fallback shared hosting); worker queue Redis/Supervisor bila VPS — lihat [docs/operations-queue-scheduler.md](docs/operations-queue-scheduler.md)
+- [ ] `MAIL_MAILER=smtp` terkonfigurasi (email reset password dikirim via queue)
+- [ ] `php artisan production:check` tanpa `FAIL`; tinjau setiap `WARN`
+- [ ] Export backup dari **Pengaturan → Sistem & Audit**
 
 ## 7. Struktur Database (ringkasan)
 
@@ -217,4 +215,4 @@ Prinsip: normalized, foreign-key constrained, indexed pada kolom pencarian (`slu
 
 ---
 
-**Referensi cepat:** `README.md` (arsitektur & API) · `database/schema.sql` (DDL lengkap) · `.env.example` (seluruh variabel konfigurasi).
+**Referensi cepat:** `README.md` (arsitektur & API) · `backend/database/migrations/` (sumber skema MySQL) · `.env.example` (seluruh variabel konfigurasi).

@@ -7,3 +7,7 @@ build/
 .env.local
 .DS_Store
 Thumbs.db
+
+# Local tooling / agent artifacts (not part of the product)
+.commandcode/
+work/

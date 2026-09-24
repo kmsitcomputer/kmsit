@@ -1,18 +1,25 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import schemaSql from '../../../../database/schema.sql?raw';
-import { db, type AuditLog, type GatewayKey } from '../../lib/db';
-import { getSetting, setSettings, audit, exportBackup, fmtDateTime, downloadFile, maskKey } from '../../lib/services';
-import { GATEWAYS } from '../../lib/commerce';
+import { Link, useLocation } from 'react-router-dom';
+import type { GatewayKey } from '../../lib/types';
+import { fmtDateTime, downloadFile } from '../../lib/format';
+import { getSetting, patchRemoteSettings } from '../../lib/settings';
 import { api } from '../../lib/api';
-import { useApp, useDB } from '../../state/store';
+import { useApp } from '../../state/store';
 import { Icon } from '../../components/icons';
-import { Badge, Confirm, CopyButton, DataTable, Field, MediaPicker, Modal, PageHeader, Select, StatCard, TextArea, TextInput, Toggle } from '../../components/ui';
+import { Badge, CopyButton, Field, MediaPicker, PageHeader, Select, TextArea, TextInput, Toggle } from '../../components/ui';
 import { DashShell } from '../../components/Shell';
+import { PagedTable, RemoteView, useRemote } from '../../components/remote';
 
-function Section({ title, children, delay = 0 }: { title: string; children: React.ReactNode; delay?: number }) {
+/** Credentials live only in the server environment; this list only names them. */
+const GATEWAY_INFO: Array<{ key: GatewayKey; name: string; env: string[] }> = [
+  { key: 'tripay', name: 'Tripay', env: ['TRIPAY_API_KEY', 'TRIPAY_PRIVATE_KEY', 'TRIPAY_MERCHANT_CODE'] },
+  { key: 'xendit', name: 'Xendit', env: ['XENDIT_API_KEY', 'XENDIT_CALLBACK_TOKEN'] },
+  { key: 'stripe', name: 'Stripe', env: ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'] },
+];
+
+function Section({ title, children, delay = 0, id }: { title: string; children: React.ReactNode; delay?: number; id?: string }) {
   return (
-    <div className="card p-6 anim-rise" style={{ animationDelay: `${delay}ms` }}>
+    <div id={id} className="card p-6 anim-rise" style={{ animationDelay: `${delay}ms` }}>
       <h2 className="mb-4 font-display text-base font-bold text-base-900 dark:text-base-50">{title}</h2>
       {children}
     </div>
@@ -22,20 +29,30 @@ function Section({ title, children, delay = 0 }: { title: string; children: Reac
 /* ================= general ================= */
 
 export function SettingsGeneral() {
-  useDB();
   const { user, toast } = useApp();
-  const s = db.settings();
-  const [f, setF] = useState({ ...s });
+  const [f, setF] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    void api.adminSettings().then((remote) => setF((current) => ({ ...current, ...Object.fromEntries(Object.entries(remote).map(([key, value]) => [key, value ?? ''])) }))).finally(() => setLoading(false));
+    void api.adminSettings().then((remote) => setF(Object.fromEntries(Object.entries(remote).map(([key, value]) => [key, value ?? '']))))
+      .catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal memuat pengaturan.')).finally(() => setLoading(false));
   }, []);
   const [logoPick, setLogoPick] = useState<'logo' | 'favicon' | null>(null);
+  /* Keys actually rendered in the General form — only these are safe to persist */
+  const WritableKeys = [
+    'site_name','site_url','slogan','logo','favicon','footer_text',
+    'email','phone','whatsapp','google_maps_api_key','address',
+    'map_lat','map_lng','map_query',
+    'social_facebook','social_instagram','social_youtube','social_tiktok',
+    'seo_title','seo_description',
+    'allow_registration','maintenance_mode',
+    'platform_fee_percent','currency',
+  ] as const;
+
   if (!user) return null;
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
   const save = () => {
-    void Promise.all(Object.entries(f).map(([key, value]) => api.updateSetting(key, String(value ?? '')))).then(() => {
-      audit(user.id, user.name, 'update', 'settings', null, 'Memperbarui pengaturan umum');
+    void Promise.all(WritableKeys.map((key) => api.updateSetting(key, String(f[key] ?? '')))).then(() => {
+      patchRemoteSettings(Object.fromEntries(WritableKeys.map((key) => [key, String(f[key] ?? '')])));
       toast('success', 'Pengaturan disimpan.');
     }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan pengaturan.'));
   };
@@ -126,18 +143,27 @@ export function SettingsGeneral() {
 /* ================= payment gateway ================= */
 
 export function SettingsPayments() {
-  useDB();
   const { user, toast } = useApp();
-  const s = db.settings();
-  const [active, setActive] = useState<GatewayKey>((s.gateway_active as GatewayKey) ?? 'tripay');
-  const [mode, setMode] = useState<'sandbox' | 'live'>(s.gateway_mode === 'live' ? 'live' : 'sandbox');
+  const location = useLocation();
+  const [active, setActive] = useState<GatewayKey>('tripay');
+  const [mode, setMode] = useState<'sandbox' | 'live'>('sandbox');
   const [configured, setConfigured] = useState<Record<string, boolean>>({});
-  useEffect(() => { void api.paymentSettings().then((remote) => { setActive(remote.gateway); setMode(remote.mode); setConfigured(remote.configured); }); }, []);
+  useEffect(() => {
+    const gatewayFromQuery = new URLSearchParams(location.search).get('gateway') as GatewayKey | null;
+    if (gatewayFromQuery && ['tripay', 'xendit', 'stripe'].includes(gatewayFromQuery)) {
+      setActive(gatewayFromQuery);
+    }
+    void api.paymentSettings().then((remote) => {
+      setActive((gatewayFromQuery && ['tripay', 'xendit', 'stripe'].includes(gatewayFromQuery) ? gatewayFromQuery : remote.gateway));
+      setMode(remote.mode);
+      setConfigured(remote.configured);
+    }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal memuat payment settings.'));
+  }, [location.search]);
   if (!user) return null;
-  const callbackUrl = `${s.site_url || window.location.origin}/api/v1/payments/callback`;
+  const callbackUrl = `${getSetting('site_url') || window.location.origin}/api/v1/payments/webhook/${active}`;
 
   const save = () => {
-    void api.updatePaymentSettings(active, mode).then(() => { audit(user.id, user.name, 'update', 'settings', null, `Gateway aktif: ${active} (${mode})`); toast('success', 'Mode payment gateway disimpan.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan payment settings.'));
+    void api.updatePaymentSettings(active, mode).then(() => { toast('success', 'Mode payment gateway disimpan.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan payment settings.'));
   };
 
   return (
@@ -146,7 +172,7 @@ export function SettingsPayments() {
         actions={<button className="btn-primary" onClick={save}><Icon name="check" size={15} /> Simpan</button>} />
       <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
         <div className="space-y-4">
-          {GATEWAYS.map((g) => (
+          {GATEWAY_INFO.map((g) => (
             <div key={g.key} className={`card p-5 transition-all ${active === g.key ? 'border-brand-500/60 shadow-[0_0_0_1px_var(--color-brand-500)]' : ''} anim-rise`}>
               <div className="flex items-center gap-3">
                 <button onClick={() => setActive(g.key)} className={`flex h-5 w-5 items-center justify-center rounded-full border-2 cursor-pointer transition-colors ${active === g.key ? 'border-brand-500 bg-brand-500' : 'border-base-300 dark:border-base-600'}`}>
@@ -154,18 +180,10 @@ export function SettingsPayments() {
                 </button>
                 <div className="flex-1">
                   <p className="font-display text-base font-bold text-base-900 dark:text-base-50">{g.name}</p>
-                  <p className="font-mono text-[10px] text-base-400">{g.methods.map((m) => m.label).join(' · ')}</p>
+                  <p className="font-mono text-[10px] text-base-400">{g.env.join(' · ')}</p>
                 </div>
+                <Badge tone={configured[g.key] ? 'ok' : 'warn'}>{configured[g.key] ? 'Terkonfigurasi' : 'Belum dikonfigurasi'}</Badge>
                 {active === g.key && <Badge tone="brand" dot>AKTIF</Badge>}
-              </div>
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {g.keyFields.map((kf) => (
-                  <Field key={kf.key} label={kf.label}>
-                    <div className="relative">
-                      <TextInput type="text" value={configured[g.key] ? 'Terkonfigurasi di server' : 'Belum dikonfigurasi'} readOnly className="font-mono text-xs" />
-                    </div>
-                  </Field>
-                ))}
               </div>
             </div>
           ))}
@@ -179,7 +197,7 @@ export function SettingsPayments() {
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-[11px] leading-4 text-base-400">Sandbox memakai simulator gateway lokal dengan signature & webhook yang sama seperti production.</p>
+            <p className="mt-3 text-[11px] leading-4 text-base-400">Sandbox tidak menghubungi provider dan tidak memiliki simulator; webhook provider hanya diverifikasi dengan credential server. Gunakan Live untuk transaksi nyata.</p>
           </Section>
           <Section title="Callback / Webhook" delay={60}>
             <p className="mb-2 text-[11px] text-base-400">Daftarkan URL ini di dashboard gateway:</p>
@@ -197,14 +215,79 @@ export function SettingsPayments() {
   );
 }
 
+/* ================= integrations ================= */
+
+export function SettingsIntegrations() {
+  const { user, toast, t } = useApp();
+  const location = useLocation();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    void api.adminSettings().then((remote) => setValues(Object.fromEntries(Object.entries(remote).map(([key, value]) => [key, value ?? '']))))
+      .catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal memuat integrasi.')).finally(() => setLoading(false));
+  }, []);
+  useEffect(() => {
+    const section = new URLSearchParams(location.search).get('section');
+    if (!section) return;
+    const target = document.getElementById(section);
+    if (target) {
+      setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }), 120);
+    }
+  }, [location.search]);
+  if (!user) return null;
+  const set = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
+  const save = () => {
+    void api.updateSettings({
+      zoom_account_id: values.zoom_account_id ?? '',
+      zoom_client_id: values.zoom_client_id ?? '',
+      gmeet_default_url: values.gmeet_default_url ?? '',
+      youtube_channel_url: values.youtube_channel_url ?? '',
+    }).then(() => { toast('success', 'Integrasi berhasil disimpan.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan integrasi.'));
+  };
+  return (
+    <DashShell title={t('nav_integrations')}>
+      <PageHeader title={t('nav_integrations')} sub="Status integrasi berdasarkan kode aktual. Integrasi berlabel “Belum aktif” hanya menyimpan konfigurasi dan belum dipakai sistem."
+        actions={<button className="btn-primary" onClick={save} disabled={loading}><Icon name="check" size={15} /> Simpan Konfigurasi</button>} />
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Section title="Payment Gateway" id="payment">
+          <Badge tone="ok">Aktif</Badge>
+          <p className="mt-2 text-sm text-base-500">Tripay, Xendit, dan Stripe menggunakan credential server yang aman. Video lesson YouTube/Vimeo (embed) juga aktif.</p>
+          <a href="#/dashboard/settings-payments" className="btn-outline mt-4 inline-flex"><Icon name="card" size={15} /> Kelola Payment Gateway</a>
+        </Section>
+        <Section title="Zoom Meeting" id="zoom" delay={60}>
+          <Badge tone="warn">{t('not_active')}</Badge>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <Field label="Account ID"><TextInput value={values.zoom_account_id ?? ''} onChange={(e) => set('zoom_account_id', e.target.value)} placeholder="Zoom Account ID" /></Field>
+            <Field label="Client ID"><TextInput value={values.zoom_client_id ?? ''} onChange={(e) => set('zoom_client_id', e.target.value)} placeholder="Zoom OAuth Client ID" /></Field>
+          </div>
+          <p className="mt-3 text-[11px] text-base-400">Client Secret dan Webhook Secret tetap di `.env` server.</p>
+        </Section>
+        <Section title="Google Meet" id="gmeet" delay={120}>
+          <Badge tone="warn">{t('not_active')}</Badge>
+          <Field label="Link Meet Default" hint="Dapat diganti per kelas atau lesson."><TextInput value={values.gmeet_default_url ?? ''} onChange={(e) => set('gmeet_default_url', e.target.value)} placeholder="https://meet.google.com/..." /></Field>
+        </Section>
+        <Section title="YouTube Channel" id="youtube" delay={180}>
+          <Badge tone="warn">{t('not_active')}</Badge>
+          <Field label="Channel YouTube Default" hint="URL YouTube digunakan sebagai default konten video."><TextInput value={values.youtube_channel_url ?? ''} onChange={(e) => set('youtube_channel_url', e.target.value)} placeholder="https://www.youtube.com/@channel" /></Field>
+        </Section>
+      </div>
+    </DashShell>
+  );
+}
+
 /* ================= language ================= */
 
 export function SettingsLanguage() {
-  useDB();
   const { user, toast } = useApp();
-  const s = db.settings();
-  const [f, setF] = useState({ lang: s.default_language ?? 'id', tz: s.timezone ?? 'Asia/Jakarta', cur: s.currency ?? 'IDR' });
+  const [f, setF] = useState({ lang: getSetting('default_language', 'id'), tz: getSetting('timezone', 'Asia/Jakarta'), cur: getSetting('currency', 'IDR') });
+  const [saving, setSaving] = useState(false);
   if (!user) return null;
+  const save = () => {
+    setSaving(true);
+    const patch = { default_language: f.lang, timezone: f.tz, currency: f.cur };
+    void api.updateSettings(patch).then(() => { patchRemoteSettings(patch); toast('success', 'Pengaturan wilayah disimpan.'); })
+      .catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan pengaturan wilayah.')).finally(() => setSaving(false));
+  };
   return (
     <DashShell title="Bahasa & Wilayah">
       <PageHeader title="Bahasa & Wilayah" sub="Arsitektur translation Laravel-style: tambah bahasa = tambah kamus." />
@@ -228,7 +311,7 @@ export function SettingsLanguage() {
           </Select>
         </Section>
       </div>
-      <button className="btn-primary mt-5" onClick={() => { setSettings({ default_language: f.lang, timezone: f.tz, currency: f.cur }); toast('success', 'Pengaturan wilayah disimpan.'); }}>
+      <button className="btn-primary mt-5" disabled={saving} onClick={save}>
         <Icon name="check" size={15} /> Simpan
       </button>
     </DashShell>
@@ -237,69 +320,43 @@ export function SettingsLanguage() {
 
 /* ================= system & audit ================= */
 
+type AuditRow = { id: string; user_name: string | null; action: string; model: string; model_id: string | null; detail: string | null; ip: string | null; created_at: string | null };
+
 export function SettingsSystem() {
   const { user, toast } = useApp();
-  const nav = useNavigate();
   const [model, setModel] = useState('');
-  const [resetOpen, setResetOpen] = useState(false);
-  const [resetText, setResetText] = useState('');
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [models, setModels] = useState<string[]>([]);
-  useEffect(() => {
-    if (!user) return;
-    void api.auditLogs(model).then((response) => {
-      setModels(response.models);
-      setLogs(response.logs.map((item: any) => ({
-        id: String(item.id), userId: item.user_id, userName: item.user_name, action: item.action,
-        model: item.model, modelId: item.model_id, detail: item.detail || '', ip: item.ip || '', ua: item.ua || '',
-        createdAt: item.created_at ? Date.parse(item.created_at) : 0, updatedAt: item.updated_at ? Date.parse(item.updated_at) : 0,
-      })));
-    }).catch(() => { setLogs([]); setModels([]); });
-  }, [user, model]);
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [model]);
+  const audit = useRemote(() => api.auditLogs({ page, model }), [page, model]);
   if (!user) return null;
-  const meta = db.meta();
+  const backup = () => {
+    void api.backup().then((data) => { downloadFile(`kmsit-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2)); toast('success', 'Backup diunduh tanpa credential dan hash password.'); })
+      .catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal membuat backup.'));
+  };
 
   return (
     <DashShell title="Sistem & Audit">
-      <PageHeader title="Sistem & Audit Log" sub="Aktivitas penting tercatat: login, CRUD, pembayaran, approval, withdrawal." />
-      <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard icon="shield" label="Status Instalasi" value="Terkunci" sub={meta.installedAt ? `sejak ${fmtDateTime(meta.installedAt)}` : ''} tone="ok" delay={0} />
-        <StatCard icon="key" label="APP_KEY" value={<span className="font-mono text-sm">{maskKey(meta.appKey)}</span>} sub="disimpan di .env" tone="info" delay={50} />
-        <StatCard icon="server" label="Database" value="MySQL" sub="adapter relational" tone="brand" delay={100} />
-        <StatCard icon="file" label="Audit Log" value={logs.length} sub="entri termuat" tone="accent" delay={150} />
-      </div>
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Select value={model} onChange={(e) => setModel(e.target.value)} className="w-auto">
-          <option value="">Semua Model</option>
-          {models.map((m) => <option key={m} value={m}>{m}</option>)}
-        </Select>
-        <button className="btn-outline" onClick={() => { void api.backup().then((data) => { downloadFile(`kmsit-backup-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data, null, 2)); toast('success', 'Backup diunduh tanpa credential dan hash password.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal membuat backup.')); }}><Icon name="download" size={15} /> Backup Database</button>
-        <button className="btn-outline" onClick={() => { downloadFile('kmsit_computer.sql', schemaSql, 'text/plain'); toast('success', 'Skema MySQL lengkap diunduh (40+ tabel + seed struktur).'); }}><Icon name="database" size={15} /> Skema SQL</button>
-      </div>
-      <DataTable rows={logs} pageSize={10} searchKeys={(l) => `${l.userName} ${l.action} ${l.model} ${l.detail}`}
-        emptyTitle="Belum ada log" emptySub="Aktivitas akan tercatat otomatis."
-        columns={[
-          { key: 'time', label: 'Waktu', render: (l) => <span className="font-mono text-[10px] text-base-400">{fmtDateTime(l.createdAt)}</span> },
-          { key: 'user', label: 'User', render: (l) => <span className="text-sm font-bold text-base-800 dark:text-base-100">{l.userName || 'system'}</span> },
-          { key: 'action', label: 'Aksi', render: (l) => <Badge tone={l.action === 'delete' || l.action === 'reject' ? 'danger' : l.action === 'create' ? 'ok' : l.action.includes('payment') ? 'accent' : 'neutral'}>{l.action}</Badge> },
-          { key: 'model', label: 'Model', render: (l) => <span className="font-mono text-[11px]">{l.model}{l.modelId ? `#${l.modelId.slice(-5)}` : ''}</span> },
-          { key: 'detail', label: 'Detail', render: (l) => <span className="text-xs text-base-500">{l.detail}</span> },
-          { key: 'ip', label: 'IP', render: (l) => <span className="font-mono text-[10px] text-base-400">{l.ip}</span> },
-        ]} />
-      <div className="mt-6 card border-danger-500/30 p-6 anim-rise">
-        <h2 className="font-display text-base font-bold text-danger-500">Danger Zone</h2>
-        <p className="mt-1 text-sm text-base-500">Reset menghapus SELURUH database aplikasi dan mengembalikan installer. Super Admin & semua data hilang.</p>
-        <button className="btn-danger mt-4" onClick={() => { setResetOpen(true); setResetText(''); }}><Icon name="alert-triangle" size={15} /> Reset Aplikasi</button>
-      </div>
-      <Modal open={resetOpen} onClose={() => setResetOpen(false)} title="Reset Aplikasi" footer={
-        <><button className="btn-ghost" onClick={() => setResetOpen(false)}>Batal</button>
-          <button className="btn-danger" disabled={resetText !== 'RESET'} onClick={() => { db.resetAll(); localStorage.removeItem('kmsit_session_token'); nav('/install'); }}>
-            <Icon name="trash" size={14} /> Hapus Semua & Kembali ke Installer
-          </button></>
-      }>
-        <p className="text-sm text-base-500">Ketik <b className="font-mono text-danger-500">RESET</b> untuk konfirmasi. Tindakan ini tidak dapat dibatalkan.</p>
-        <TextInput className="mt-3 font-mono" value={resetText} onChange={(e) => setResetText(e.target.value)} placeholder="RESET" />
-      </Modal>
+      <PageHeader title="Sistem & Audit Log" sub="Aktivitas penting tercatat di server: pembayaran, earning, withdrawal, anomali voucher/stok."
+        actions={<>
+          <Link to="/dashboard/operations" className="btn-outline"><Icon name="server" size={15} /> Status Operasional</Link>
+          {user.roleKey === 'super_admin' && <button className="btn-outline" onClick={backup}><Icon name="download" size={15} /> Backup Database</button>}
+        </>} />
+      <RemoteView remote={audit}>
+        {(data) => (
+          <PagedTable<AuditRow> page={data.page} onPage={setPage} rowKey={(l) => l.id}
+            toolbar={<Select value={model} onChange={(e) => setModel(e.target.value)} className="w-auto py-2 text-sm">
+              <option value="">Semua Model</option>
+              {data.models.map((m) => <option key={m} value={m}>{m}</option>)}
+            </Select>}
+            columns={[
+              { key: 'time', label: 'Waktu', render: (l) => <span className="font-mono text-[10px] text-base-400">{fmtDateTime(l.created_at)}</span> },
+              { key: 'user', label: 'User', render: (l) => <span className="text-sm font-bold text-base-800 dark:text-base-100">{l.user_name || 'system'}</span> },
+              { key: 'action', label: 'Aksi', render: (l) => <Badge tone={l.action.includes('delete') || l.action.includes('reject') || l.action.includes('over_limit') || l.action.includes('shortage') ? 'danger' : l.action.includes('payment') || l.action.includes('withdrawal') ? 'accent' : 'neutral'}>{l.action}</Badge> },
+              { key: 'model', label: 'Model', render: (l) => <span className="font-mono text-[11px]">{l.model}{l.model_id ? `#${l.model_id.slice(-5)}` : ''}</span> },
+              { key: 'detail', label: 'Detail', render: (l) => <span className="text-xs text-base-500">{l.detail}</span> },
+            ]} />
+        )}
+      </RemoteView>
     </DashShell>
   );
 }

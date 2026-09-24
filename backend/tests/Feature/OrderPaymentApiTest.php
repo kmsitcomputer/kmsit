@@ -17,6 +17,9 @@ class OrderPaymentApiTest extends TestCase
 
     public function test_paid_course_is_enrolled_only_after_valid_webhook(): void
     {
+        // Ensure private_key is set for signature verification
+        config(['payment.tripay.private_key' => 'test-callback-secret']);
+
         $this->seed();
         $instructor = $this->user('instructor', 'pay-instructor@example.com');
         $student = $this->user('student', 'pay-student@example.com');
@@ -36,7 +39,9 @@ class OrderPaymentApiTest extends TestCase
             ->postJson('/api/v1/orders/' . $order . '/payment', ['gateway' => 'tripay', 'method' => 'QRIS'])
             ->assertCreated()
             ->json('payment');
-        $signature = hash_hmac('sha256', implode('|', [$payment['reference'], $payment['amount'], 'paid']), config('app.key'));
+        // Tripay payload-based HMAC: reference|amount|status signed with private_key config.
+        $privateKey = (string) config('payment.tripay.private_key');
+        $signature = hash_hmac('sha256', implode('|', [$payment['reference'], $payment['amount'], 'paid']), $privateKey);
 
         $this->postJson('/api/v1/payments/webhook/tripay', [
             'reference' => $payment['reference'], 'amount' => $payment['amount'], 'status' => 'paid', 'signature' => 'invalid',

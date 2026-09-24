@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { db, uid, now, type Row, type ID, type Category, type Certificate, type ProductVariant } from '../../lib/db';
-import { fmtDate, MediaService, uniqueSlug, audit } from '../../lib/services';
-import { CategoryService, CertificateService } from '../../lib/lms';
+import type { Row, ID, Category, ProductVariant } from '../../lib/types';
+import { fmtDate, slugify, tempId } from '../../lib/format';
 import { CertificateModal } from '../public/Certificates';
 import { api, type ApiCertificate } from '../../lib/api';
-import { useApp, useDB } from '../../state/store';
+import { useApp } from '../../state/store';
+import { PagedTable, Pager, RemoteView, useRemote } from '../../components/remote';
 import { Icon, type IconName } from '../../components/icons';
 import RichText from '../../components/RichText';
-import { Badge, Confirm, CopyButton, DataTable, EmptyState, Field, IconButton, MediaPicker, Modal, PageHeader, Select, StatusBadge, Tabs, TextArea, TextInput, Toggle } from '../../components/ui';
+import { Badge, Confirm, CopyButton, EmptyState, Field, IconButton, MediaPicker, Modal, PageHeader, Select, StatusBadge, Tabs, TextArea, TextInput, Toggle } from '../../components/ui';
 import { DashShell } from '../../components/Shell';
 
 /* ================= generic content module ================= */
@@ -150,7 +150,7 @@ function VariantEditor({ value, onChange }: { value: ProductVariant[]; onChange:
         </div>
       )}
       <div className="border-t border-base-200 dark:border-base-800 p-2.5">
-        <button type="button" className="btn-outline btn-sm" onClick={() => onChange([...rows, { id: uid().slice(0, 8), label: '', price: 0, stock: 0 }])}>
+        <button type="button" className="btn-outline btn-sm" onClick={() => onChange([...rows, { id: tempId().slice(0, 8), label: '', price: 0, stock: 0 }])}>
           <Icon name="plus" size={12} /> Tambah Varian
         </button>
       </div>
@@ -160,6 +160,7 @@ function VariantEditor({ value, onChange }: { value: ProductVariant[]; onChange:
 
 function FieldInput({ fd, value, onChange }: { fd: FieldDef; value: unknown; onChange: (v: unknown) => void }) {
   const [mediaOpen, setMediaOpen] = useState(false);
+  const { categories } = useApp();
   switch (fd.type) {
     case 'variants': return <VariantEditor value={(value as ProductVariant[]) ?? []} onChange={(v) => onChange(v && v.length > 0 ? v : null)} />;
     case 'text': return <TextInput value={String(value ?? '')} onChange={(e) => onChange(e.target.value)} />;
@@ -175,7 +176,7 @@ function FieldInput({ fd, value, onChange }: { fd: FieldDef; value: unknown; onC
     case 'category': return (
       <Select value={String(value ?? '')} onChange={(e) => onChange(e.target.value || null)}>
         <option value="">— Tanpa Kategori —</option>
-        {CategoryService.byScope(fd.scope ?? 'article').map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        {categories.filter((c) => c.scope === (fd.scope ?? 'article')).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
       </Select>
     );
     case 'media': return (
@@ -195,73 +196,61 @@ function FieldInput({ fd, value, onChange }: { fd: FieldDef; value: unknown; onC
   }
 }
 
+type CmsType = 'articles' | 'news' | 'tutorials' | 'activities' | 'pages';
+
 export function ContentModule({ def }: { def: ModuleDef }) {
-  useDB();
-  const { user, toast } = useApp();
-  const isCmsContent = ['articles', 'news', 'tutorials', 'activities', 'pages'].includes(def.table);
+  const { user, toast, categoryName } = useApp();
   const isProduct = def.table === 'products';
-  const [remoteRows, setRemoteRows] = useState<Row[]>([]);
-  const refreshContent = () => {
-    if (isCmsContent) void api.manageContent(def.table as 'articles' | 'news' | 'tutorials' | 'activities' | 'pages').then((items) => setRemoteRows(items as unknown as Row[])).catch(() => setRemoteRows([]));
-    if (isProduct) void api.manageProducts().then((items) => setRemoteRows(items as unknown as Row[])).catch(() => setRemoteRows([]));
-  };
-  useEffect(refreshContent, [def.table, isCmsContent, isProduct]);
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [statusFilter, query, def.table]);
+  const content = useRemote<import('../../lib/pagination').Page<Row>>(
+    () => (isProduct
+      ? api.manageProducts({ page, status: statusFilter, q: query })
+      : api.manageContent(def.table as CmsType, { page, status: statusFilter, q: query })) as unknown as Promise<import('../../lib/pagination').Page<Row>>,
+    [def.table, page, statusFilter, query],
+  );
+  const refreshContent = content.reload;
   const [editing, setEditing] = useState<Row | 'new' | null>(null);
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [del, setDel] = useState<Row | null>(null);
+  const [saving, setSaving] = useState(false);
   if (!user) return null;
 
   const openEditor = (row: Row | 'new') => { setEditing(row); setForm(toFormValue(def, row === 'new' ? null : row)); };
+  const fail = (fallback: string) => (error: unknown) => toast('error', error instanceof Error ? error.message : fallback);
 
   const save = () => {
     for (const fd of def.fields) {
       if (fd.required && !String(form[fd.name] ?? '').trim()) { toast('error', `"${fd.label}" wajib diisi.`); return; }
     }
     const name = String(form[def.nameField] ?? '').trim();
-    const slugField = def.table === 'products' ? 'name' : 'title';
     const status = form.status === 'published' ? 'published' : 'draft';
-    const patch: Record<string, unknown> = { ...form, status };
-    patch[slugField] = name;
-    patch.slug = uniqueSlug(def.table, name, editing !== 'new' ? (editing as Row).id : undefined);
-    if ('tags' in patch) patch.tags = String(patch.tags ?? '').split(',').map((s: string) => s.trim()).filter(Boolean);
-    if ('galleryLines' in patch) { patch.gallery = String(patch.galleryLines ?? '').split('\n').map((s: string) => s.trim()).filter(Boolean); delete patch.galleryLines; }
-    delete patch.lines;
-    if (status === 'published' && !(editing !== 'new' && (editing as { publishedAt?: number | null }).publishedAt)) patch.publishedAt = now();
-    if (def.table === 'products') {
-      patch.price = Number(patch.price) || 0; patch.discountPrice = Number(patch.discountPrice) || 0; patch.stock = Number(patch.stock) || 0;
-      const vs = Array.isArray(patch.variants) ? (patch.variants as ProductVariant[]).map((v) => ({ ...v, label: v.label.trim(), price: Number(v.price) || 0, stock: Number(v.stock) || 0 })).filter((v) => v.label) : null;
-      patch.variants = vs && vs.length > 0 ? vs : null;
-      if (patch.variants) patch.stock = (patch.variants as ProductVariant[]).reduce((a, v) => a + v.stock, 0);
-    }
-    if (isCmsContent) {
-      const payload = { title: name, slug: patch.slug, excerpt: patch.excerpt, description: patch.description, content: patch.content, thumbnail: patch.thumbnail, category_id: patch.categoryId, video_url: patch.videoUrl, status };
-      const type = def.table as 'articles' | 'news' | 'tutorials' | 'activities' | 'pages';
-      const saveRequest = editing === 'new' ? api.createContent(type, payload) : api.updateContent(type, (editing as Row).id, payload);
-      void saveRequest.then(() => { toast('success', `${def.title} disimpan${status === 'published' ? ' & dipublikasikan' : ''}.`); refreshContent(); setEditing(null); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan content.'));
-      return;
-    }
+    // New rows get a slug suggestion; the server stays authoritative for uniqueness and existing slugs are kept.
+    const slug = editing === 'new' ? slugify(name) : String((editing as unknown as { slug?: string }).slug ?? '');
+    const tags = 'tags' in form ? String(form.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean) : undefined;
+    const gallery = 'galleryLines' in form ? String(form.galleryLines ?? '').split('\n').map((t) => t.trim()).filter(Boolean) : undefined;
+    setSaving(true);
+    let request: Promise<unknown>;
     if (isProduct) {
-      const payload = { name, slug: patch.slug, description: patch.description, thumbnail: patch.thumbnail, price: Number(patch.price) || 0, discount_price: Number(patch.discountPrice) || 0, stock: Number(patch.stock) || 0, category_id: patch.categoryId, status, featured: Boolean(patch.featured), is_digital: Boolean(patch.isDigital), digital_file_url: patch.digitalFileUrl, variants: patch.variants || [] };
-      const saveRequest = editing === 'new' ? api.createProduct(payload) : api.updateProduct((editing as Row).id, payload);
-      void saveRequest.then(() => { toast('success', `${def.title} disimpan.`); refreshContent(); setEditing(null); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan produk.'));
-      return;
-    }
-    if (editing === 'new') {
-      patch.authorId = user.id;
-      db.insert(def.table, patch as never);
-      audit(user.id, user.name, 'create', def.table.slice(0, -1), null, `Membuat ${def.title.toLowerCase()} "${name}"`);
+      const vs = Array.isArray(form.variants) ? (form.variants as ProductVariant[]).map((v) => ({ label: v.label.trim(), price: Number(v.price) || 0, stock: Number(v.stock) || 0 })).filter((v) => v.label) : [];
+      const payload = { name, slug, description: form.description, thumbnail: form.thumbnail, price: Number(form.price) || 0, discount_price: Number(form.discountPrice) || 0, stock: vs.length > 0 ? vs.reduce((a, v) => a + v.stock, 0) : Number(form.stock) || 0, category_id: form.categoryId || null, status, featured: Boolean(form.featured), is_digital: Boolean(form.isDigital), digital_file_url: form.digitalFileUrl || null, variants: vs };
+      request = editing === 'new' ? api.createProduct(payload) : api.updateProduct((editing as Row).id, payload);
     } else {
-      db.update(def.table, (editing as Row).id, patch as never);
-      audit(user.id, user.name, 'update', def.table.slice(0, -1), (editing as Row).id, `Memperbarui "${name}"`);
+      const payload = { title: name, slug, excerpt: form.excerpt, description: form.description, content: form.content, thumbnail: form.thumbnail, category_id: form.categoryId || null, video_url: form.videoUrl || null, tags, gallery, event_date: form.eventDate || null, event_time: form.eventTime || null, location: form.location || null, registration_url: form.registrationUrl || null, status };
+      request = editing === 'new' ? api.createContent(def.table as CmsType, payload) : api.updateContent(def.table as CmsType, (editing as Row).id, payload);
     }
-    toast('success', `${def.title} disimpan${status === 'published' ? ' & dipublikasikan' : ''}.`);
-    setEditing(null);
+    void request.then(() => { toast('success', `${def.title} disimpan${status === 'published' ? ' & dipublikasikan' : ''}.`); refreshContent(); setEditing(null); })
+      .catch(fail(`Gagal menyimpan ${def.title.toLowerCase()}.`)).finally(() => setSaving(false));
   };
 
-  let rows = (isCmsContent || isProduct) ? remoteRows.slice() : db.all(def.table) as Row[];
-  if (statusFilter) rows = rows.filter((r) => (r as { status?: string }).status === statusFilter);
-  rows = rows.sort((a, b) => b.createdAt - a.createdAt);
+  const toggleStatus = (r: Row) => {
+    const next = (r as { status?: string }).status === 'published' ? 'draft' : 'published';
+    const request = isProduct ? api.updateProduct(r.id, { status: next }) : api.updateContent(def.table as CmsType, r.id, { status: next });
+    void request.then(() => { toast('success', next === 'published' ? 'Dipublikasikan.' : 'Ditarik ke draft.'); refreshContent(); }).catch(fail('Gagal mengubah status.'));
+  };
 
   return (
     <DashShell title={def.title}>
@@ -269,61 +258,59 @@ export function ContentModule({ def }: { def: ModuleDef }) {
         actions={<button className="btn-primary" onClick={() => openEditor('new')}><Icon name="plus" size={15} /> {`Buat ${def.title}`}</button>} />
       <div className="mb-4 flex items-center justify-between gap-3">
         <Tabs tabs={[{ key: '', label: 'Semua' }, { key: 'published', label: 'Terbit' }, { key: 'draft', label: 'Draft' }]} active={statusFilter} onChange={setStatusFilter} />
-        <span className="font-mono text-xs text-base-400">{rows.length} entri</span>
+        <span className="font-mono text-xs text-base-400">{content.data ? `${content.data.total} entri` : ''}</span>
       </div>
-      <DataTable rows={rows} pageSize={8}
-        searchKeys={(r) => String((r as unknown as Record<string, unknown>)[def.nameField] ?? '')}
-        emptyTitle="Belum ada data" emptySub={`Belum ada ${def.title.toLowerCase()} — buat yang pertama.`}
-        emptyAction={<button className="btn-primary" onClick={() => openEditor('new')}><Icon name="plus" size={14} /> Create New</button>}
-        columns={[
-          { key: 'name', label: def.title, render: (r: Row) => {
-            const rec = r as unknown as Record<string, unknown>;
-            return (
-              <div className="flex items-center gap-3">
-                {rec.thumbnail ? <img src={String(rec.thumbnail)} alt="" className="h-10 w-16 rounded-md object-cover" /> : <span className="flex h-10 w-16 items-center justify-center rounded-md bg-base-100 dark:bg-base-800 text-base-400"><Icon name={def.icon} size={15} /></span>}
-                <div className="min-w-0">
-                  <p className="truncate font-bold text-base-900 dark:text-base-100 max-w-64">{String(rec[def.nameField])}</p>
-                  <p className="font-mono text-[10px] text-base-400">/{String(rec.slug)}{rec.eventDate ? ` · ${fmtDate(String(rec.eventDate))}` : ''}</p>
-                </div>
+      <RemoteView remote={content} isEmpty={(p) => p.total === 0 && !statusFilter && !query} emptyTitle="Belum ada data" emptySub={`Belum ada ${def.title.toLowerCase()} — buat yang pertama.`}>
+        {(data) => (
+          <PagedTable<Row> page={data} onPage={setPage} rowKey={(r) => r.id}
+            toolbar={<form className="relative min-w-[200px] flex-1 sm:max-w-xs" onSubmit={(e) => { e.preventDefault(); setQuery(search.trim()); }}>
+              <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-400" />
+              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari…" className="input pl-9 py-2 text-sm" />
+            </form>}
+            columns={[
+              { key: 'name', label: def.title, render: (r) => {
+                const rec = r as unknown as Record<string, unknown>;
+                return (
+                  <div className="flex items-center gap-3">
+                    {rec.thumbnail ? <img src={String(rec.thumbnail)} alt="" className="h-10 w-16 rounded-md object-cover" /> : <span className="flex h-10 w-16 items-center justify-center rounded-md bg-base-100 dark:bg-base-800 text-base-400"><Icon name={def.icon} size={15} /></span>}
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-base-900 dark:text-base-100 max-w-64">{String(rec[def.nameField])}</p>
+                      <p className="font-mono text-[10px] text-base-400">/{String(rec.slug)}{rec.eventDate ? ` · ${fmtDate(String(rec.eventDate))}` : ''}</p>
+                    </div>
+                  </div>
+                );
+              }},
+              { key: 'cat', label: 'Kategori', render: (r) => <span className="text-xs font-semibold text-base-500">{categoryName((r as { categoryId?: ID | null }).categoryId ?? null) || '—'}</span> },
+              ...(isProduct ? [{ key: 'price', label: 'Harga & Tipe', render: (r: Row) => {
+                const rec = r as unknown as { price?: number; discountPrice?: number; variants?: ProductVariant[] | null; isDigital?: boolean; stock?: number };
+                const vs = rec.variants && rec.variants.length > 0 ? rec.variants : null;
+                const min = vs ? Math.min(...vs.map((v) => v.price)) : rec.discountPrice && rec.discountPrice > 0 && rec.discountPrice < (rec.price ?? 0) ? rec.discountPrice : rec.price ?? 0;
+                return (
+                  <div>
+                    <span className="font-display text-sm font-bold">{vs && <span className="mr-1 font-mono text-[9px] font-normal text-base-400">mulai</span>}{min.toLocaleString('id-ID')}</span>
+                    <div className="mt-0.5 flex items-center gap-1.5">
+                      {rec.isDigital && <Badge tone="accent"><Icon name="download" size={9} /> Digital</Badge>}
+                      {vs && <Badge tone="info">{vs.length} varian</Badge>}
+                      <span className="font-mono text-[9px] text-base-400">stok {rec.stock ?? 0}</span>
+                    </div>
+                  </div>
+                );
+              } }] : []),
+              { key: 'date', label: 'Tanggal', render: (r) => <span className="font-mono text-[11px] text-base-400">{fmtDate(r.createdAt)}</span> },
+              { key: 'status', label: 'Status', render: (r) => <StatusBadge status={String((r as { status?: string }).status ?? 'draft')} /> },
+            ]}
+            rowActions={(r) => (
+              <div className="flex items-center justify-end gap-1">
+                {def.publicPath && (r as { status?: string }).status === 'published' && (
+                  <Link to={`${def.publicPath}/${(r as { slug?: string }).slug}`} target="_blank"><IconButton icon="eye" title="Lihat publik" onClick={() => {}} /></Link>
+                )}
+                <IconButton icon={(r as { status?: string }).status === 'published' ? 'eye-off' : 'check-circle'} title={(r as { status?: string }).status === 'published' ? 'Tarik (draft)' : 'Publikasikan'} tone="brand" onClick={() => toggleStatus(r)} />
+                <IconButton icon="pencil" title="Edit" tone="brand" onClick={() => openEditor(r)} />
+                <IconButton icon="trash" title="Hapus" tone="danger" onClick={() => setDel(r)} />
               </div>
-            );
-          }},
-          { key: 'cat', label: 'Kategori', render: (r: Row) => <span className="text-xs font-semibold text-base-500">{CategoryService.name((r as { categoryId?: ID | null }).categoryId ?? null)}</span> },
-          ...(def.table === 'products' ? [{ key: 'price', label: 'Harga & Tipe', render: (r: Row) => {
-            const rec = r as unknown as { price?: number; discountPrice?: number; variants?: ProductVariant[] | null; isDigital?: boolean; stock?: number };
-            const vs = rec.variants && rec.variants.length > 0 ? rec.variants : null;
-            const min = vs ? Math.min(...vs.map((v) => v.price)) : rec.discountPrice && rec.discountPrice > 0 && rec.discountPrice < (rec.price ?? 0) ? rec.discountPrice : rec.price ?? 0;
-            return (
-              <div>
-                <span className="font-display text-sm font-bold">{vs && <span className="mr-1 font-mono text-[9px] font-normal text-base-400">mulai</span>}{min.toLocaleString('id-ID')}</span>
-                <div className="mt-0.5 flex items-center gap-1.5">
-                  {rec.isDigital && <Badge tone="accent"><Icon name="download" size={9} /> Digital</Badge>}
-                  {vs && <Badge tone="info">{vs.length} varian</Badge>}
-                  <span className="font-mono text-[9px] text-base-400">stok {rec.stock ?? 0}</span>
-                </div>
-              </div>
-            );
-          } }] : []),
-          { key: 'date', label: 'Tanggal', render: (r: Row) => <span className="font-mono text-[11px] text-base-400">{fmtDate(r.createdAt)}</span> },
-          { key: 'status', label: 'Status', render: (r: Row) => <StatusBadge status={String((r as { status?: string }).status ?? 'draft')} /> },
-        ]}
-        rowActions={(r: Row) => (
-          <>
-            {def.publicPath && (r as { status?: string }).status === 'published' && (
-              <Link to={`${def.publicPath}/${(r as { slug?: string }).slug}`} target="_blank"><IconButton icon="eye" title="Lihat publik" onClick={() => {}} /></Link>
-            )}
-            <IconButton icon={(r as { status?: string }).status === 'published' ? 'eye-off' : 'check-circle'} title={(r as { status?: string }).status === 'published' ? 'Tarik (draft)' : 'Publikasikan'} tone="brand"
-              onClick={() => {
-                const next = (r as { status?: string }).status === 'published' ? 'draft' : 'published';
-                if (isCmsContent) void api.updateContent(def.table as 'articles' | 'news' | 'tutorials' | 'activities' | 'pages', r.id, { status: next }).then(refreshContent);
-                else if (isProduct) void api.updateProduct(r.id, { status: next }).then(refreshContent);
-                else db.update(def.table, r.id, { status: next, ...(next === 'published' && !(r as { publishedAt?: number | null }).publishedAt ? { publishedAt: now() } : {}) } as never);
-                toast('success', next === 'published' ? 'Dipublikasikan.' : 'Ditarik ke draft.');
-              }} />
-            <IconButton icon="pencil" title="Edit" tone="brand" onClick={() => openEditor(r)} />
-            <IconButton icon="trash" title="Hapus" tone="danger" onClick={() => setDel(r)} />
-          </>
-        )} />
+            )} />
+        )}
+      </RemoteView>
 
       <Modal open={!!editing} onClose={() => setEditing(null)} title={editing === 'new' ? `Buat ${def.title}` : `Edit ${def.title}`} wide footer={
         <>
@@ -331,7 +318,7 @@ export function ContentModule({ def }: { def: ModuleDef }) {
             <Toggle checked={form.status === 'published'} onChange={(v) => setForm({ ...form, status: v ? 'published' : 'draft' })} label="Publikasikan" />
           </div>
           <button className="btn-ghost" onClick={() => setEditing(null)}>Batal</button>
-          <button className="btn-primary" onClick={save}><Icon name="check" size={14} /> Simpan</button>
+          <button className="btn-primary" disabled={saving} onClick={save}><Icon name="check" size={14} /> Simpan</button>
         </>
       }>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -345,11 +332,11 @@ export function ContentModule({ def }: { def: ModuleDef }) {
         </div>
       </Modal>
       <Confirm open={!!del} onClose={() => setDel(null)} message={`Hapus "${String((del as unknown as Record<string, unknown> | null)?.[def.nameField] ?? '')}"?`}
-        onConfirm={() => { if (del) {
-          if (isCmsContent) void api.deleteContent(def.table as 'articles' | 'news' | 'tutorials' | 'activities' | 'pages', del.id).then(() => { toast('success', 'Dihapus.'); refreshContent(); setDel(null); });
-          else if (isProduct) void api.deleteProduct(del.id).then(() => { toast('success', 'Dihapus.'); refreshContent(); setDel(null); });
-          else { db.remove(def.table, del.id); audit(user.id, user.name, 'delete', def.table.slice(0, -1), del.id, 'Menghapus entri'); toast('success', 'Dihapus.'); }
-        } }} />
+        onConfirm={() => {
+          if (!del) return;
+          const request = isProduct ? api.deleteProduct(del.id) : api.deleteContent(def.table as CmsType, del.id);
+          void request.then(() => { toast('success', 'Dihapus.'); refreshContent(); setDel(null); }).catch(fail('Gagal menghapus.'));
+        }} />
     </DashShell>
   );
 }
@@ -357,7 +344,6 @@ export function ContentModule({ def }: { def: ModuleDef }) {
 /* ================= categories ================= */
 
 export function CategoriesPage() {
-  useDB();
   const { user, toast } = useApp();
   const [scope, setScope] = useState<Category['scope']>('course');
   const [name, setName] = useState('');
@@ -413,20 +399,23 @@ export function CategoriesPage() {
 /* ================= media library page ================= */
 
 export function MediaPage() {
-  useDB();
   const { user, toast } = useApp();
+  const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
+  const [page, setPage] = useState(1);
   const [del, setDel] = useState<ID | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { setPage(1); }, [q]);
+  const media = useRemote(() => api.media({ page, q, per_page: 30 }), [page, q, user?.id]);
   if (!user) return null;
-  const items = db.all('media').slice().reverse().filter((m) => !q || m.name.toLowerCase().includes(q.toLowerCase()));
   const upload = async (files: FileList | null) => {
     if (!files) return;
     for (const f of Array.from(files)) {
-      const res = await MediaService.add(f, user.id);
-      if ('error' in res) toast('error', `${f.name}: ${res.error}`);
+      try { await api.uploadMedia(f); }
+      catch (error) { toast('error', `${f.name}: ${error instanceof Error ? error.message : 'Gagal mengunggah.'}`); }
     }
     toast('success', 'Unggahan selesai.');
+    media.reload();
   };
   return (
     <DashShell title="Media Library">
@@ -435,32 +424,38 @@ export function MediaPage() {
           <input ref={fileRef} type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={(e) => { upload(e.target.files); e.target.value = ''; }} />
           <button className="btn-primary" onClick={() => fileRef.current?.click()}><Icon name="upload" size={15} /> Unggah File</button>
         </>} />
-      <div className="mb-4 max-w-xs relative">
+      <form className="mb-4 max-w-xs relative" onSubmit={(e) => { e.preventDefault(); setQ(search.trim()); }}>
         <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-400" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Cari file…" className="input pl-9" />
-      </div>
-      {items.length === 0 ? <EmptyState icon="image" title="Belum ada media" sub="Unggah gambar atau PDF untuk digunakan di konten." /> : (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
-          {items.map((m, i) => (
-            <div key={m.id} className="card card-hover group overflow-hidden anim-rise" style={{ animationDelay: `${(i % 6) * 40}ms` }}>
-              <div className="relative">
-                {m.mime.startsWith('image/') ? <img src={m.url} alt={m.name} className="aspect-square w-full object-cover" /> : (
-                  <span className="flex aspect-square items-center justify-center bg-base-100 dark:bg-base-850 text-base-400"><Icon name="file" size={26} /></span>
-                )}
-                <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-base-950/60 opacity-0 transition-opacity group-hover:opacity-100">
-                  <CopyButton text={m.url} label="" />
-                  <button className="btn-danger btn-sm" onClick={() => setDel(m.id)}><Icon name="trash" size={12} /></button>
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari file…" className="input pl-9" />
+      </form>
+      <RemoteView remote={media} isEmpty={(p) => p.total === 0} emptyTitle="Belum ada media" emptySub="Unggah gambar atau PDF untuk digunakan di konten.">
+        {(data) => (
+          <>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+              {data.items.map((m, i) => (
+                <div key={m.id} className="card card-hover group overflow-hidden anim-rise" style={{ animationDelay: `${(i % 6) * 40}ms` }}>
+                  <div className="relative">
+                    {m.mime.startsWith('image/') ? <img src={m.url} alt={m.name} className="aspect-square w-full object-cover" /> : (
+                      <span className="flex aspect-square items-center justify-center bg-base-100 dark:bg-base-850 text-base-400"><Icon name="file" size={26} /></span>
+                    )}
+                    <div className="absolute inset-0 flex items-center justify-center gap-1.5 bg-base-950/60 opacity-0 transition-opacity group-hover:opacity-100">
+                      <CopyButton text={m.url} label="" />
+                      <button className="btn-danger btn-sm" onClick={() => setDel(m.id)}><Icon name="trash" size={12} /></button>
+                    </div>
+                  </div>
+                  <div className="px-2.5 py-2">
+                    <p className="truncate text-[11px] font-bold text-base-700 dark:text-base-200">{m.name}</p>
+                    <p className="font-mono text-[9px] text-base-400">{(m.size / 1024).toFixed(0)} KB · {m.mime.split('/')[1]}</p>
+                  </div>
                 </div>
-              </div>
-              <div className="px-2.5 py-2">
-                <p className="truncate text-[11px] font-bold text-base-700 dark:text-base-200">{m.name}</p>
-                <p className="font-mono text-[9px] text-base-400">{(m.size / 1024).toFixed(0)} KB · {m.mime.split('/')[1]}</p>
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
-      <Confirm open={!!del} onClose={() => setDel(null)} message="Hapus file ini dari media library?" onConfirm={() => { if (del) { MediaService.remove(del); toast('success', 'File dihapus.'); } }} />
+            <div className="card mt-4"><Pager page={data} onPage={setPage} /></div>
+          </>
+        )}
+      </RemoteView>
+      <Confirm open={!!del} onClose={() => setDel(null)} message="Hapus file ini dari media library?"
+        onConfirm={() => { if (del) void api.deleteMedia(del).then(() => { toast('success', 'File dihapus.'); setDel(null); media.reload(); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menghapus file.')); }} />
     </DashShell>
   );
 }
@@ -536,33 +531,41 @@ export function CertificateTemplatesPage() {
 /* ================= certificates list ================= */
 
 export function CertificatesAdmin() {
-  const { user, toast } = useApp();
-  const [rows, setRows] = useState<ApiCertificate[]>([]);
+  const { user, toast, t } = useApp();
+  const [page, setPage] = useState(1);
+  const [status, setStatus] = useState('');
   const [view, setView] = useState<ApiCertificate | null>(null);
   const [revoke, setRevoke] = useState<string | null>(null);
-  useEffect(() => { if (user) void api.certificates().then(setRows).catch(() => setRows([])); }, [user]);
+  useEffect(() => { setPage(1); }, [status]);
+  const certificates = useRemote(() => api.certificates({ page, status }), [page, status, user?.id]);
   if (!user) return null;
+  const isStudent = user.roleKey === 'student';
+  const canRevoke = user.roleKey === 'super_admin' || (user.roleKey === 'admin' && (user.permissions ?? []).includes('manage_certificates'));
   return (
-    <DashShell title="Sertifikat">
-      <PageHeader title="Sertifikat Digital" sub="Diterbitkan otomatis saat student menyelesaikan kelas & lulus quiz." />
-      <DataTable rows={rows} pageSize={9} searchKeys={(c) => `${c.number} ${c.studentName ?? ''}`}
-        emptyTitle="Belum ada sertifikat" emptySub="Sertifikat terbit otomatis begitu student memenuhi syarat kelulusan."
-        columns={[
-          { key: 'number', label: 'Nomor', render: (c) => <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400">{c.number}</span> },
-          { key: 'student', label: 'Student', render: (c) => <span className="text-sm font-semibold">{c.studentName ?? '—'}</span> },
-          { key: 'course', label: 'Kelas', render: (c) => <span className="text-xs text-base-500">{c.courseTitle ?? '—'}</span> },
-          { key: 'issued', label: 'Terbit', render: (c) => <span className="font-mono text-[11px] text-base-400">{fmtDate(c.issuedAt)}</span> },
-          { key: 'views', label: 'Verifikasi', render: (c) => <Badge tone="info">{c.views}x</Badge> },
-          { key: 'status', label: 'Status', render: (c) => <StatusBadge status={c.status} /> },
-        ]}
-        rowActions={(c) => (
-          <>
-            <IconButton icon="eye" title="Lihat & verifikasi" tone="brand" onClick={() => setView(c)} />
-            {c.status === 'issued' && <IconButton icon="alert-triangle" title="Cabut" tone="danger" onClick={() => setRevoke(c.id)} />}
-          </>
-        )} />
-        <Confirm open={!!revoke} onClose={() => setRevoke(null)} message="Cabut sertifikat ini? Halaman verifikasi akan menampilkan status REVOKED." dangerLabel="Ya, Cabut"
-          onConfirm={() => { if (revoke) void api.revokeCertificate(revoke).then(() => { toast('success', 'Sertifikat dicabut.'); setRevoke(null); return api.certificates(); }).then(setRows).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal mencabut sertifikat.')); }} />
+    <DashShell title={isStudent ? t('nav_my_certificates') : t('certificates')}>
+      <PageHeader title={isStudent ? t('nav_my_certificates') : 'Sertifikat Digital'} sub="Diterbitkan otomatis saat student menyelesaikan kelas & lulus quiz." />
+      <div className="mb-4"><Tabs tabs={[{ key: '', label: t('all') }, { key: 'issued', label: 'Terbit' }, { key: 'revoked', label: 'Dicabut' }]} active={status} onChange={setStatus} /></div>
+      <RemoteView remote={certificates} isEmpty={(p) => p.total === 0 && !status} emptyTitle="Belum ada sertifikat" emptySub="Sertifikat terbit otomatis begitu student memenuhi syarat kelulusan.">
+        {(data) => (
+          <PagedTable<ApiCertificate> page={data} onPage={setPage} rowKey={(c) => c.id}
+            columns={[
+              { key: 'number', label: 'Nomor', render: (c) => <span className="font-mono text-xs font-bold text-brand-600 dark:text-brand-400">{c.number}</span> },
+              ...(isStudent ? [] : [{ key: 'student', label: 'Student', render: (c: ApiCertificate) => <span className="text-sm font-semibold">{c.studentName ?? '—'}</span> }]),
+              { key: 'course', label: 'Kelas', render: (c) => <span className="text-xs text-base-500">{c.courseTitle ?? '—'}</span> },
+              { key: 'issued', label: 'Terbit', render: (c) => <span className="font-mono text-[11px] text-base-400">{fmtDate(c.issuedAt || c.createdAt)}</span> },
+              { key: 'views', label: 'Verifikasi', render: (c) => <Badge tone="info">{c.views}x</Badge> },
+              { key: 'status', label: 'Status', render: (c) => <StatusBadge status={c.status} /> },
+            ]}
+            rowActions={(c) => (
+              <div className="flex items-center justify-end gap-1">
+                <IconButton icon="eye" title="Lihat & verifikasi" tone="brand" onClick={() => setView(c)} />
+                {canRevoke && c.status === 'issued' && <IconButton icon="alert-triangle" title="Cabut" tone="danger" onClick={() => setRevoke(c.id)} />}
+              </div>
+            )} />
+        )}
+      </RemoteView>
+      <Confirm open={!!revoke} onClose={() => setRevoke(null)} message="Cabut sertifikat ini? Halaman verifikasi akan menampilkan status REVOKED." dangerLabel="Ya, Cabut"
+        onConfirm={() => { if (revoke) void api.revokeCertificate(revoke).then(() => { toast('success', 'Sertifikat dicabut.'); setRevoke(null); certificates.reload(); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal mencabut sertifikat.')); }} />
       {view && <CertificateModal certificate={view} open onClose={() => setView(null)} />}
     </DashShell>
   );

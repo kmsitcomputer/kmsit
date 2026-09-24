@@ -51,6 +51,28 @@ class ShopApiTest extends TestCase
         $response->assertCreated()->assertJsonPath('product.stock', 5)->assertJsonCount(2, 'product.variants');
     }
 
+    public function test_admin_can_publish_a_draft_product_without_resending_every_field(): void
+    {
+        $this->seed();
+        $admin = $this->user('product-toggle-admin@example.com', 'admin');
+        $product = $this->actingAs($admin, 'sanctum')->postJson('/api/v1/admin/products', [
+            'name' => 'Mouse Wireless', 'price' => 75000, 'stock' => 4, 'status' => 'draft',
+            'variants' => [['label' => 'Hitam', 'price' => 75000, 'stock' => 4]],
+        ])->assertCreated()->json('product');
+        $this->assertFalse(\App\Models\Product::whereKey($product['id'])->where('status', 'published')->exists());
+
+        // The dashboard's row-level publish/unpublish toggle only ever sends {status}.
+        $updated = $this->actingAs($admin, 'sanctum')->putJson("/api/v1/admin/products/{$product['id']}", ['status' => 'published'])
+            ->assertOk()->json('product');
+        $this->assertSame('published', $updated['status']);
+        // Fields not included in the partial payload (and existing variants) must survive untouched.
+        $this->assertSame('Mouse Wireless', $updated['name']);
+        $this->assertSame(75000, $updated['price']);
+        $this->assertCount(1, $updated['variants']);
+
+        $this->getJson('/api/v1/shop/products')->assertOk()->assertJsonFragment(['id' => $product['id']]);
+    }
+
     private function user(string $email, string $role = 'student'): User
     {
         return User::create(['id' => Str::lower(Str::random(12)), 'role_key' => $role, 'name' => 'Shop User', 'email' => $email, 'password_hash' => Hash::make('password'), 'status' => 'active', 'instructor_approved' => true]);

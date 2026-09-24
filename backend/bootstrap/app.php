@@ -6,7 +6,22 @@ use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use App\Http\Middleware\PreventMaintenanceAccess;
 
-return Application::configure(basePath: dirname(__DIR__))
+$basePath = dirname(__DIR__);
+$envPath = $basePath . '/.env';
+
+if (!is_file($envPath)) {
+    $appKey = 'base64:' . base64_encode(random_bytes(32));
+    $templatePath = $basePath . '/.env.production.example';
+    $template = is_file($templatePath) ? file_get_contents($templatePath) : "APP_ENV=production\nAPP_DEBUG=false\n";
+    $environment = preg_replace('/^APP_KEY=.*$/m', 'APP_KEY=' . $appKey, $template);
+
+    if (@file_put_contents($envPath, $environment, LOCK_EX) === false) {
+        putenv('APP_KEY=' . $appKey);
+        $_ENV['APP_KEY'] = $appKey;
+    }
+}
+
+return Application::configure(basePath: $basePath)
     ->withRouting(
         web: __DIR__.'/../routes/web.php',
         api: __DIR__.'/../routes/api.php',

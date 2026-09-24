@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use Illuminate\Http\JsonResponse;
+use App\Support\AdminAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -41,5 +42,5 @@ class CategoryController extends Controller
         return response()->json(['message' => 'Kategori dihapus.']);
     }
 
-    private function admin(Request $request): void { abort_unless(in_array($request->user()->role_key, ['admin', 'super_admin'], true), 403, 'Tidak memiliki permission.'); }
+    private function admin(Request $request): void { AdminAccess::authorize($request->user(), 'manage_categories'); }
 }

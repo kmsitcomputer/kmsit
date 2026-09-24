@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useSyncExternalStore, useState, type ReactNode } from 'react';
-import { db, type User } from '../lib/db';
-import { currentUser, logout as doLogout, can, getSetting, hydratePublicSettings } from '../lib/services';
+import type { Category, User } from '../lib/types';
+import { can } from '../lib/permissions';
+import { getSetting, hydratePublicSettings, settingsVersion, subscribeSettings } from '../lib/settings';
 import { api } from '../lib/api';
 import { translate, type Lang, type TKey } from '../lib/i18n';
 
-/* ---------- db reactivity ---------- */
-export function useDB(): number {
-  return useSyncExternalStore((cb) => db.subscribe(cb), () => db.revision(), () => 0);
+/* ---------- server settings reactivity (in-memory, re-read from the API on every load) ---------- */
+export function useSettingsVersion(): number {
+  return useSyncExternalStore(subscribeSettings, settingsVersion, () => 0);
 }
 
 /* ---------- toasts ---------- */
@@ -26,6 +27,8 @@ interface AppState {
   toasts: Toast[];
   toast: (kind: Toast['kind'], msg: string) => void;
   dismissToast: (id: number) => void;
+  categories: Category[];
+  categoryName: (id: string | null | undefined) => string;
 }
 
 const DEFAULT_FAVICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='1' y='1' width='22' height='22' rx='6' fill='%2314b8a6'/%3E%3Cpath d='M8 6v12M8 12l6-5M8 12l6 5' stroke='%2304211d' stroke-width='2.4' stroke-linecap='round' fill='none'/%3E%3C/svg%3E";
@@ -40,14 +43,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeMode>(() => (readPreference('kmsit_pref_theme') as ThemeMode) || 'system');
   const [lang, setLangState] = useState<Lang>(() => ((readPreference('kmsit_pref_lang') as Lang) || (getSetting('default_language', 'id') as Lang) || 'id'));
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const settingsRev = useSettingsVersion();
 
   useEffect(() => {
     let active = true;
-    currentUser().then((loadedUser) => { if (active) setUser(loadedUser); });
+    api.me().then((loadedUser) => { if (active) setUser(loadedUser); });
     return () => { active = false; };
   }, []);
 
-  useEffect(() => { void api.publicSettings().then(hydratePublicSettings).catch(() => undefined); }, []);
+  useEffect(() => {
+    void api.publicSettings().then(hydratePublicSettings).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    void api.categories().then((items) => setCategories(items.map((category) => ({
+      id: String(category.id),
+      scope: category.scope as Category['scope'],
+      name: String(category.name ?? ''),
+      slug: String(category.slug ?? ''),
+      createdAt: category.created_at ? Date.parse(category.created_at) : 0,
+      updatedAt: category.updated_at ? Date.parse(category.updated_at) : 0,
+    })))).catch(() => setCategories([]));
+  }, []);
+  const categoryName = useCallback((id: string | null | undefined) => categories.find((c) => c.id === id)?.name ?? '', [categories]);
 
   useEffect(() => {
     const apply = () => {
@@ -60,15 +79,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => mq.removeEventListener('change', apply);
   }, [theme]);
 
-  /* favicon dinamis dari settings CMS */
-  const rev = useDB();
+  /* favicon dinamis dari settings CMS (server) */
   useEffect(() => {
-    const fav = db.settings().favicon || '';
+    const fav = getSetting('favicon');
     let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
     if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
     link.type = fav.includes('svg') ? 'image/svg+xml' : 'image/png';
     link.href = fav || DEFAULT_FAVICON;
-  }, [rev]);
+  }, [settingsRev]);
 
   const setTheme = useCallback((t: ThemeMode) => { setThemeState(t); writePreference('kmsit_pref_theme', t); }, []);
   const setLang = useCallback((l: Lang) => { setLangState(l); writePreference('kmsit_pref_lang', l); }, []);
@@ -81,12 +99,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => setToasts((ts) => ts.filter((x) => x.id !== id)), 4200);
   }, []);
 
-  const refreshUser = useCallback(() => { void currentUser().then(setUser); }, []);
-  const logout = useCallback(() => { void doLogout(user).finally(() => setUser(null)); }, [user]);
+  const refreshUser = useCallback(() => { void api.me().then(setUser); }, []);
+  const logout = useCallback(() => { void api.logout().catch(() => undefined).finally(() => setUser(null)); }, []);
 
   const value = useMemo<AppState>(() => ({
-    user, setUser, refreshUser, logout, theme, setTheme, lang, setLang, t, toasts, toast, dismissToast,
-  }), [user, theme, lang, toasts, setTheme, setLang, t, toast, dismissToast, refreshUser, logout]);
+    user, setUser, refreshUser, logout, theme, setTheme, lang, setLang, t, toasts, toast, dismissToast, categories, categoryName,
+  }), [user, theme, lang, toasts, settingsRev, categories, categoryName, setTheme, setLang, t, toast, dismissToast, refreshUser, logout]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

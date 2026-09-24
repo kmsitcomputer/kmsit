@@ -126,4 +126,20 @@ return [
         'table' => 'failed_jobs',
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Scheduler-Driven Worker (shared hosting fallback)
+    |--------------------------------------------------------------------------
+    |
+    | Hosts without Supervisor/systemd can drain the queue from the single
+    | "schedule:run" cron entry: every minute a short-lived worker processes
+    | pending jobs and exits. Keep disabled when a long-running worker exists.
+    |
+    */
+
+    'scheduler_worker' => [
+        'enabled' => (bool) env('QUEUE_SCHEDULER_WORKER', false),
+        'max_time' => (int) env('QUEUE_SCHEDULER_WORKER_MAX_TIME', 50),
+    ],
+
 ];

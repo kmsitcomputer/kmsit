@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\ContactMessage;
 use Illuminate\Http\JsonResponse;
+use App\Support\AdminAccess;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
@@ -19,7 +20,19 @@ class ContactController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        abort_unless(in_array($request->user()->role_key, ['admin', 'super_admin'], true), 403, 'Tidak memiliki permission.');
-        return response()->json(['messages' => ContactMessage::latest()->paginate(30)]);
+        AdminAccess::authorize($request->user(), 'view_messages');
+        $query = ContactMessage::query()
+            ->when($request->has('is_read'), fn ($q) => $q->where('is_read', $request->boolean('is_read')))
+            ->latest()->orderByDesc('id');
+        return response()->json(['messages' => \App\Support\Pagination::paginate($query, $request, 30)]);
+    }
+
+    public function update(Request $request, string $id): JsonResponse
+    {
+        AdminAccess::authorize($request->user(), 'view_messages');
+        $data = $request->validate(['is_read' => ['required', 'boolean']]);
+        $message = ContactMessage::findOrFail($id);
+        $message->update($data);
+        return response()->json(['contact' => $message->fresh()]);
     }
 }

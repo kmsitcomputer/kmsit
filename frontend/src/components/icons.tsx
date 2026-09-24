@@ -10,7 +10,7 @@ export type IconName =
   | 'logout' | 'clock' | 'star' | 'filter' | 'arrow-right' | 'arrow-left' | 'arrow-up' | 'arrow-down'
   | 'refresh' | 'key' | 'database' | 'server' | 'shield' | 'code' | 'terminal' | 'map-pin' | 'phone'
   | 'mail' | 'chat' | 'facebook' | 'instagram' | 'youtube' | 'tiktok' | 'link' | 'type' | 'tag'
-  | 'home' | 'store' | 'settings' | 'chart' | 'send' | 'flag' | 'target' | 'briefcase' | 'file' | 'camera';
+  | 'home' | 'store' | 'settings' | 'chart' | 'send' | 'flag' | 'target' | 'briefcase' | 'file' | 'camera' | 'palette';
 
 const P: Record<IconName, ReactNode> = {
   logo: <><rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor" stroke="none" /><path d="M9 8v8M9 12l5-4M9 12l5 4" stroke="var(--logo-fg,#04211d)" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" fill="none" /></>,
@@ -101,7 +101,70 @@ const P: Record<IconName, ReactNode> = {
   briefcase: <><rect x="2.5" y="7" width="19" height="13" rx="2" /><path d="M8.5 7V5A1.5 1.5 0 0 1 10 3.5h4A1.5 1.5 0 0 1 15.5 5v2" /><path d="M2.5 12.5h19" /></>,
   file: <><path d="M14 2.5H6a2 2 0 0 0-2 2v15a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8.5l-6-6Z" /><path d="M14 2.5v6h6" /></>,
   camera: <><path d="M4 8h3l2-3h6l2 3h3a1.5 1.5 0 0 1 1.5 1.5V19a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 19V9.5A1.5 1.5 0 0 1 4 8Z" /><circle cx="12" cy="13.5" r="3.5" /></>,
+  palette: <><path d="M12 2.5a9.5 9.5 0 1 0 0 19c1.4 0 2-.9 2-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-.9.7-1.6 1.6-1.6h1.9a4.5 4.5 0 0 0 4.5-4.5c0-5-4.5-8.7-9-8.7Z" /><circle cx="7" cy="11" r="1.3" fill="currentColor" stroke="none" /><circle cx="10" cy="7.3" r="1.3" fill="currentColor" stroke="none" /><circle cx="15" cy="7.3" r="1.3" fill="currentColor" stroke="none" /><circle cx="17.3" cy="11.5" r="1.3" fill="currentColor" stroke="none" /></>,
 };
+
+/**
+ * Per-icon accent colors (text + matching tinted background) shared by the dashboard sidebar
+ * and the public site, so icons read as colorful chips instead of a flat single-color set.
+ */
+const TONE: Partial<Record<IconName, { text: string; bg: string }>> = {
+  grid: { text: 'text-sky-500', bg: 'bg-sky-500/12' },
+  'grad-cap': { text: 'text-violet-500', bg: 'bg-violet-500/12' },
+  download: { text: 'text-cyan-500', bg: 'bg-cyan-500/12' },
+  award: { text: 'text-amber-500', bg: 'bg-amber-500/12' },
+  receipt: { text: 'text-emerald-500', bg: 'bg-emerald-500/12' },
+  book: { text: 'text-blue-500', bg: 'bg-blue-500/12' },
+  tag: { text: 'text-orange-500', bg: 'bg-orange-500/12' },
+  target: { text: 'text-rose-500', bg: 'bg-rose-500/12' },
+  users: { text: 'text-indigo-500', bg: 'bg-indigo-500/12' },
+  'file-text': { text: 'text-teal-500', bg: 'bg-teal-500/12' },
+  news: { text: 'text-fuchsia-500', bg: 'bg-fuchsia-500/12' },
+  'book-open': { text: 'text-lime-600', bg: 'bg-lime-600/12' },
+  calendar: { text: 'text-red-500', bg: 'bg-red-500/12' },
+  bag: { text: 'text-pink-500', bg: 'bg-pink-500/12' },
+  card: { text: 'text-green-500', bg: 'bg-green-500/12' },
+  wallet: { text: 'text-yellow-500', bg: 'bg-yellow-500/12' },
+  banknote: { text: 'text-emerald-600', bg: 'bg-emerald-600/12' },
+  shield: { text: 'text-purple-500', bg: 'bg-purple-500/12' },
+  chat: { text: 'text-blue-600', bg: 'bg-blue-600/12' },
+  layout: { text: 'text-cyan-600', bg: 'bg-cyan-600/12' },
+  list: { text: 'text-orange-600', bg: 'bg-orange-600/12' },
+  file: { text: 'text-slate-500', bg: 'bg-slate-500/12' },
+  info: { text: 'text-sky-600', bg: 'bg-sky-600/12' },
+  image: { text: 'text-pink-600', bg: 'bg-pink-600/12' },
+  gear: { text: 'text-slate-600', bg: 'bg-slate-600/12' },
+  globe: { text: 'text-teal-600', bg: 'bg-teal-600/12' },
+  server: { text: 'text-violet-600', bg: 'bg-violet-600/12' },
+  user: { text: 'text-indigo-500', bg: 'bg-indigo-500/12' },
+  star: { text: 'text-amber-500', bg: 'bg-amber-500/12' },
+  play: { text: 'text-rose-500', bg: 'bg-rose-500/12' },
+  cart: { text: 'text-emerald-500', bg: 'bg-emerald-500/12' },
+  store: { text: 'text-orange-500', bg: 'bg-orange-500/12' },
+  'map-pin': { text: 'text-red-500', bg: 'bg-red-500/12' },
+  mail: { text: 'text-blue-500', bg: 'bg-blue-500/12' },
+  phone: { text: 'text-green-500', bg: 'bg-green-500/12' },
+  send: { text: 'text-sky-500', bg: 'bg-sky-500/12' },
+  flag: { text: 'text-rose-500', bg: 'bg-rose-500/12' },
+  clock: { text: 'text-amber-600', bg: 'bg-amber-600/12' },
+  search: { text: 'text-violet-500', bg: 'bg-violet-500/12' },
+  chart: { text: 'text-cyan-600', bg: 'bg-cyan-600/12' },
+  code: { text: 'text-indigo-500', bg: 'bg-indigo-500/12' },
+  facebook: { text: 'text-blue-600', bg: 'bg-blue-600/12' },
+  instagram: { text: 'text-pink-600', bg: 'bg-pink-600/12' },
+  youtube: { text: 'text-red-600', bg: 'bg-red-600/12' },
+  tiktok: { text: 'text-fuchsia-600', bg: 'bg-fuchsia-600/12' },
+};
+
+/** Tailwind text-color class for an icon's accent, e.g. for sidebar/nav items. */
+export function iconTone(name: IconName): string {
+  return TONE[name]?.text ?? 'text-brand-500';
+}
+
+/** Tailwind tinted-background class matching iconTone(name), for icon chips/badges. */
+export function iconToneBg(name: IconName): string {
+  return TONE[name]?.bg ?? 'bg-brand-500/12';
+}
 
 interface IconProps extends SVGProps<SVGSVGElement> { name: IconName; size?: number; }
 

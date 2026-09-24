@@ -15,4 +15,9 @@ class Category extends Model
     {
         return $this->hasMany(Course::class);
     }
+
+    public function articles(): HasMany { return $this->hasMany(Article::class); }
+    public function news(): HasMany { return $this->hasMany(News::class); }
+    public function tutorials(): HasMany { return $this->hasMany(Tutorial::class); }
+    public function products(): HasMany { return $this->hasMany(Product::class); }
 }

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { db } from '../lib/db';
-import { login as doLogin, register as doRegister, getSetting, MediaService } from '../lib/services';
+import { getSetting } from '../lib/settings';
 import { api } from '../lib/api';
 import { useApp } from '../state/store';
 import { Icon } from '../components/icons';
@@ -36,16 +35,21 @@ export function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   if (user) return <Navigate to="/dashboard" replace />;
-  if (!db.meta().installed) return <Navigate to="/install" replace />;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(''); setBusy(true);
-    const res = await doLogin(email, password, remember);
-    setBusy(false);
-    if (!res.ok) { setErr(res.error); return; }
-    setUser(res.user);
-    toast('success', `${t('welcome_back')}, ${res.user.name.split(' ')[0]}!`);
+    void remember;
+    try {
+      const loggedIn = await api.login(email, password);
+      setUser(loggedIn);
+      toast('success', `${t('welcome_back')}, ${loggedIn.name.split(' ')[0]}!`);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : 'Login gagal.');
+      return;
+    } finally {
+      setBusy(false);
+    }
     nav(params.get('next') || '/dashboard');
   };
 
@@ -83,7 +87,6 @@ export function RegisterPage() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
 
-  if (!db.meta().installed) return <Navigate to="/install" replace />;
   if (getSetting('allow_registration') !== '1') {
     return (
       <AuthFrame title="Pendaftaran Ditutup" sub="Registrasi publik dinonaktifkan oleh administrator.">
@@ -98,11 +101,16 @@ export function RegisterPage() {
     if (form.password.length < 8) { setErr('Password minimal 8 karakter.'); return; }
     if (form.password !== form.confirm) { setErr('Konfirmasi password tidak sama.'); return; }
     setBusy(true);
-    const res = await doRegister({ ...form, role });
-    setBusy(false);
-    if (!res.ok) { setErr(res.error); return; }
-    setUser(res.user);
-    toast('success', `Selamat datang, ${res.user.name.split(' ')[0]}!`);
+    try {
+      const registered = await api.register({ name: form.name, email: form.email, password: form.password, role: role === 'instructor' ? 'instructor' : 'student' });
+      setUser(registered);
+      toast('success', `Selamat datang, ${registered.name.split(' ')[0]}!`);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : 'Registrasi gagal.');
+      return;
+    } finally {
+      setBusy(false);
+    }
     nav('/dashboard');
   };
 
@@ -139,7 +147,6 @@ export function ForgotPage() {
   const { toast, t } = useApp();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
-  if (!db.meta().installed) return <Navigate to="/install" replace />;
   return (
     <AuthFrame title="Reset Password" sub="Masukkan email terdaftar untuk menerima tautan reset.">
       {sent ? (
@@ -181,7 +188,7 @@ export function ProfilePage() {
   };
 
   const uploadAvatar = async (f: File) => {
-    try { const res = await api.uploadMedia(f) as { url: string }; await api.updateProfile({ name: user.name, phone: user.phone, bio: user.bio, avatar: res.url, instructor_headline: user.instructorHeadline }); refreshUser(); toast('success', 'Foto profil diperbarui.'); }
+    try { await api.uploadAvatar(f); refreshUser(); toast('success', 'Foto profil diperbarui.'); }
     catch (error) { toast('error', error instanceof Error ? error.message : 'Gagal mengunggah foto.'); }
   };
 
@@ -222,6 +229,60 @@ export function ProfilePage() {
             <Field label="Konfirmasi" required><TextInput type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} /></Field>
           </div>
           <button className="btn-outline mt-4" onClick={savePw} disabled={busy}>{busy ? <Spinner size={14} /> : <Icon name="key" size={15} />} Ganti Password</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function ResetPasswordPage() {
+  const nav = useNavigate();
+  const [params] = useSearchParams();
+  const [pw, setPw] = useState({ password: '', confirm: '' });
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (pw.password.length < 8) { setError('Password minimal 8 karakter.'); return; }
+    if (pw.password !== pw.confirm) { setError('Konfirmasi password tidak sama.'); return; }
+    const email = params.get('email');
+    const token = params.get('token');
+    if (!email || !token) { setError('Link reset tidak valid.'); return; }
+    setBusy(true); setError('');
+    try {
+      await api.resetPassword(email, token, pw.password);
+      setSuccess(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal mereset password.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="relative min-h-screen overflow-hidden grid-bg flex items-center justify-center p-4">
+      <div className="absolute -top-24 right-0 h-80 w-80 rounded-full bg-brand-500/10 blur-3xl pointer-events-none" />
+      <div className="relative w-full max-w-md anim-scale">
+        <div className="mb-6 flex justify-center"><Logo /></div>
+        <div className="card p-7">
+          {success ? (
+            <div className="rounded-lg border border-ok-500/30 bg-ok-500/10 p-4 text-sm font-semibold text-ok-500">
+              Password berhasil diubah. <Link to="/login" className="underline">Kembali ke login</Link>
+            </div>
+          ) : (
+            <>
+              <h1 className="font-display text-xl font-bold text-base-900 dark:text-base-50">Reset Password</h1>
+              <p className="mt-1 text-sm text-base-500 dark:text-base-400">Masukkan password baru Anda.</p>
+              {error && <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">{error}</div>}
+              <form className="mt-6 space-y-4" onSubmit={submit}>
+                <Field label="Password Baru" required><TextInput type="password" value={pw.password} onChange={(e) => setPw({ ...pw, password: e.target.value })} required autoFocus /></Field>
+                <Field label="Konfirmasi" required><TextInput type="password" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} required /></Field>
+                <button disabled={busy} className="btn-primary w-full py-3">{busy ? <Spinner size={15} /> : 'Simpan Password Baru'}</button>
+              </form>
+            </>
+          )}
         </div>
       </div>
     </div>

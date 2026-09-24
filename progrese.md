@@ -931,7 +931,48 @@ Migrasi dari React browser-only menuju React + Laravel + MySQL sedang berjalan b
 - PHP lint, TypeScript check, dan production build lulus.
 - Audit localStorage tetap hanya menemukan adapter `src/lib/db.ts` dan installer legacy.
 
+### 2026-09-24 - Tahap 4 LMS, Quiz, Progress & Certificate
+
+- Dikerjakan, diuji, dan diperiksa sendiri dalam satu putaran; tidak mendelegasikan.
+- Inti LMS/quiz/certificate yang sudah benar dipertahankan: enrollment berbayar via order paid, isolasi progress per user, completion dihitung backend, scoring server-side, answer key tidak dikirim, ownership attempt, idempotensi certificate, dan otorisasi revoke.
+- Celah ditemukan dan ditutup dengan regression test lebih dulu:
+  - Lesson draft ikut terkirim pada `GET /courses/{slug}` untuk non-owner.
+  - `submit` attempt tidak memeriksa ulang `max_attempts` sehingga attempt `running` ganda bisa disubmit melewati batas.
+  - Quiz dan issuance certificate tidak mensyaratkan course `published` (termasuk course `archived`/soft-deleted).
+- Perbaikan minimum tanpa mengubah route, response, schema, atau UI:
+  - `CourseController@show` menyaring lesson non-published untuk non-owner.
+  - `QuizController` mensyaratkan course `published` pada `byCourse`/`show`/`start`/`submit` dan menegakkan `max_attempts` di `submit`.
+  - `CertificateController@issue` hanya untuk course `published`.
+- File berubah: `CourseController`, `QuizController`, `CertificateController`; tes baru `LmsStage4RegressionTest`. Tanpa migration.
+- Tes terarah LMS: 11 test lulus, 132 assertions. Full suite: 133 test lulus, 1052 assertions (~12.6s). `php -l` dan `git diff --check` bersih (hanya warning CRLF pre-existing).
+- Tidak menyentuh commerce, stock, wallet, settings, CMS, React, atau integrasi eksternal; tidak commit/push/deploy/migrate/seed DB existing.
+
+### 2026-09-24 - Tahap 6 Redis, Queue, Scheduler & Operasional
+
+- Email reset password tetap queued, kini terenkripsi, retry 5x dengan backoff, timeout 30s, idempotent (hanya token terbaru & belum kedaluwarsa, maksimal sekali), gagal permanen tercatat di `failed_jobs` + log tanpa token.
+- Scheduler: reclaim voucher tunggal (lock overlap 55 menit, onOneServer), heartbeat, prune failed jobs, dan worker fallback via cron bila `QUEUE_SCHEDULER_WORKER=true`.
+- `production:check` membedakan FAIL (aplikasi) vs WARN (konfigurasi/operasional); `--strict` menjadikan WARN gagal.
+- Template production: database queue + cron (tanpa Redis) sebagai default installer; profil Redis direkomendasikan terdokumentasi di `docs/operations-queue-scheduler.md`.
+- Tes: terarah 17 test/88 assertions; full suite 153 test/1148 assertions lulus. Tanpa migration/dependency baru.
+
 ### 2026-09-04 - Current production checkpoint
 
 - Server-side feature coverage sudah mencakup auth/session, profile/password reset, LMS, quiz, certificates, shop, order/payment/webhook, wallet/withdrawal, CMS, media, settings, menus, homepage, notifications, search, contact, audit, backup, dan maintenance mode.
 - Sisa yang memerlukan konfigurasi/infrastruktur: SMTP aktif, queue worker, credential gateway live, domain HTTPS callback, installer backend, migrasi consumer legacy terakhir, dan production database deployment.
+
+### 2026-09-24 - Tahap 8 Integrasi Eksternal
+
+- Dikerjakan, diuji, dan diperiksa sendiri dalam satu putaran; tanpa delegasi/reviewer. Hanya jalur provider pembayaran, validasi embed/video, config/env, dokumentasi, dan tes terkait. Tidak mengubah UI, schema, lifecycle pembayaran, wallet, stok, atau domain lain; tidak menyentuh DB/.env existing, migration, worker, npm, commit/push/deploy, atau provider nyata.
+- Inventaris dari kode aktual: **implemented** Tripay/Xendit/Stripe (hanya saat `PAYMENT_MODE=live`) dan YouTube/video embed; **configuration-only** Zoom & Google Meet; **placeholder** settings `youtube_enabled`/`youtube_channel_url`; **absent** RajaOngkir/ongkir dan OpenRoute/routing. Rincian: `docs/integrations-status.md`.
+- Hardening: timeout/connect timeout eksplisit di tiga gateway; tes membuktikan **tidak ada retry** create-payment (satu request meski error); respons provider invalid kini gagal 502 (bukan sukses diam-diam); logging aman tanpa payload/secret (canary payload tidak bocor ke response/log); `signature()` membaca config alih-alih `env()`; `STRIPE_BASE_URL` dikonfigurasi; `video_url` CMS divalidasi allowlist https host YouTube/Vimeo (materi embed sudah disanitasi); `.env.example` diselaraskan (sebelumnya tanpa variabel payment) dan `.env.production.example` dilengkapi base URL/webhook secret/timeout.
+- Dokumentasi: baru `docs/integrations-status.md`; koreksi klaim tak terbukti di `docs/blueprint.md`, `docs/blueprint.html`, `docs/architecture.md` (kontrak `PaymentGateway` disamakan kode; Zoom/GMeet/ongkir/routing dinyatakan belum ada), dan `INSTALL.md` §5.1 (credential hanya via `.env`, `PAYMENT_MODE=live` wajib agar request ke provider).
+- File: baru `backend/tests/Feature/PaymentGatewayHttpTest.php`, `backend/tests/Feature/VideoEmbedUrlValidationTest.php`, `docs/integrations-status.md`; diubah `config/payment.php`, tiga `Services/*Gateway.php`, `OrderController`, `ContentController`, `HtmlSanitizer`, `.env.example`, `.env.production.example`, `docs/*`, `INSTALL.md`. **Tanpa migration/dependency baru.**
+- Tes: terarah provider+video 12 test/73 assertions; terdampak commerce/CMS 21 test/223 assertions; full suite **165 test/1221 assertions lulus**. Dua siklus koreksi (FK role seed; Course nyata untuk FK enrollment). `php -l` dan `git diff --check` bersih (kecuali `backend/public/app.html` pre-existing).
+- Sisa/risiko: concurrency MySQL tidak diuji (SQLite); provider & callback HTTPS nyata belum diverifikasi; Zoom, Google Meet, RajaOngkir, OpenRoute masih menunggu spesifikasi/credential/keputusan produk. Tidak memulai tahap berikutnya.
+
+### 2026-09-24 - Penutupan Temuan Tahap 8: Pemilihan Gateway Server-side
+
+- `OrderController@initiatePayment` kini memilih provider dari `gateway_active` (settings) dengan fallback `config('payment.active')`, dan mode dari `gateway_mode` (settings, bila valid) dengan fallback `config('payment.mode')`. Payload `gateway` dari client **diabaikan**; hanya `method` dari client. Nilai setting yang ada tetapi tidak valid → `503 Konfigurasi payment gateway tidak valid.` tanpa memanggil provider dan tanpa membuat payment. `payments.gateway`/`payments.mode` menyimpan nilai efektif. Credential tetap config/env.
+- Webhook route tidak diubah: callback payment lama dari gateway yang sebelumnya aktif tetap diproses via `payments.gateway`. Perubahan gateway/mode admin hanya berlaku untuk payment baru.
+- Tes: `PaymentGatewayHttpTest` 15 test/81 assertions (termasuk payload client diabaikan, gateway admin dipakai, setting invalid → 503, fallback env, webhook lama, sandbox tanpa network, secret tidak bocor); terdampak payment 52 test/481 assertions; full suite **170 test/1248 assertions lulus**. `php -l` bersih. Tanpa migration/dependency baru.
+- Dokumentasi: `docs/integrations-status.md`, `docs/architecture.md`, `INSTALL.md` §5.1 diperbarui. Tidak memulai tahap berikutnya.

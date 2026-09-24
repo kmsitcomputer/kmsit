@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { db, type MenuItem, type Notification } from '../lib/db';
-import { can, getSetting, globalSearch, markAllNotifRead, markNotifRead, roleLabel, timeAgo } from '../lib/services';
-import { ShopService } from '../lib/commerce';
+import type { MenuItem, Notification, User } from '../lib/types';
+import { roleLabel, safeHref, timeAgo } from '../lib/format';
+import { getSetting } from '../lib/settings';
+import { groupedMenu, type SectionKey } from '../lib/menu';
 import { api } from '../lib/api';
-import { useApp, useDB } from '../state/store';
-import { Icon, type IconName } from './icons';
+import { useApp, useSettingsVersion } from '../state/store';
+import { Icon, iconTone, iconToneBg, type IconName } from './icons';
 import { Avatar, Badge, ToastHost } from './ui';
+import { ThemeVarsInjector } from './ThemeVars';
 
 /* ================= shared bits ================= */
 
@@ -74,6 +76,35 @@ function useClickOutside(ref: React.RefObject<HTMLElement | null>, fn: () => voi
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [ref, fn]);
+}
+
+/* ================= server-sourced header data ================= */
+
+/** Debounced `/api/v1/search` (published content only). */
+function useServerSearch(q: string) {
+  const [results, setResults] = useState<Array<{ group: string; label: string; to: string }>>([]);
+  useEffect(() => {
+    if (q.trim().length < 2) { setResults([]); return; }
+    const timer = window.setTimeout(() => { void api.search(q.trim()).then(setResults).catch(() => setResults([])); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [q]);
+  return results;
+}
+
+export const CART_CHANGED_EVENT = 'kmsit-cart-changed';
+
+/** Cart badge from the server cart; refreshed when the shop dispatches CART_CHANGED_EVENT. */
+function useCartCount(user: User | null) {
+  const [count, setCount] = useState(0);
+  const enabled = user?.roleKey === 'student' || user?.roleKey === 'instructor';
+  useEffect(() => {
+    if (!enabled) { setCount(0); return; }
+    const load = () => { void api.cart().then((cart) => setCount(cart.count)).catch(() => setCount(0)); };
+    load();
+    window.addEventListener(CART_CHANGED_EVENT, load);
+    return () => window.removeEventListener(CART_CHANGED_EVENT, load);
+  }, [enabled, user?.id]);
+  return count;
 }
 
 /* ================= public shell ================= */
@@ -147,7 +178,7 @@ function PublicNav() {
 
 export function PublicShell({ children }: { children: ReactNode }) {
   const { user, t } = useApp();
-  useDB();
+  useSettingsVersion();
   const nav = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [q, setQ] = useState('');
@@ -156,8 +187,8 @@ export function PublicShell({ children }: { children: ReactNode }) {
   useEffect(() => {
     void Promise.all([api.menus('header'), api.menus('footer')]).then(([header, footer]) => { setHeaderItems(header); setFooterItems(footer); }).catch(() => { setHeaderItems([]); setFooterItems([]); });
   }, []);
-  const results = globalSearch(q);
-  const cartCount = user ? ShopService.cartDetail(user.id).count : 0;
+  const results = useServerSearch(q);
+  const cartCount = useCartCount(user);
   const maintenance = getSetting('maintenance_mode') === '1';
   const isAdmin = !!user && (user.roleKey === 'super_admin' || user.roleKey === 'admin');
 
@@ -175,10 +206,12 @@ export function PublicShell({ children }: { children: ReactNode }) {
 
   const items = headerItems;
   const roots = items.filter((i) => !i.parentId);
+  const fallbackNav: Array<[string, string]> = [['/', t('home')], ['/courses', t('courses')], ['/tutorials', t('tutorials')], ['/articles', t('articles')], ['/news', t('news')], ['/shop', t('shop')], ['/about', t('about')]];
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="sticky top-0 z-40 border-b border-base-200/80 dark:border-base-800/80 bg-white/85 dark:bg-base-925/85 backdrop-blur-md">
+    <div className="min-h-screen flex flex-col" data-theme-scope="website">
+      <ThemeVarsInjector surface="website" />
+      <header className="surface-header sticky top-0 z-40 border-b backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-6">
           <button className="lg:hidden p-2 -ml-2 text-base-500 hover:text-base-900 dark:hover:text-base-100 cursor-pointer" onClick={() => setMobileOpen(true)} aria-label="Menu"><Icon name="menu" size={20} /></button>
           <Logo />
@@ -235,10 +268,26 @@ export function PublicShell({ children }: { children: ReactNode }) {
               </div>
             </form>
             <nav className="space-y-1">
-              {(roots.length > 0 ? roots : []).map((item) => (
-                <Link key={item.id} to={menuPath(item)} onClick={() => setMobileOpen(false)}
+              {roots.length > 0 ? roots.map((item) => {
+                const children = items.filter((child) => child.parentId === item.id).sort((a, b) => a.order - b.order);
+                return (
+                  <div key={item.id}>
+                    <Link to={menuPath(item)} onClick={() => setMobileOpen(false)}
+                      className="block rounded-lg px-3 py-2.5 text-sm font-bold text-base-700 dark:text-base-200 hover:bg-brand-500/10 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
+                      {item.label}
+                    </Link>
+                    {children.map((child) => (
+                      <Link key={child.id} to={menuPath(child)} onClick={() => setMobileOpen(false)}
+                        className="block rounded-lg py-2 pl-7 pr-3 text-sm font-semibold text-base-500 dark:text-base-400 hover:bg-brand-500/10 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                );
+              }) : fallbackNav.map(([to, label]) => (
+                <Link key={to} to={to} onClick={() => setMobileOpen(false)}
                   className="block rounded-lg px-3 py-2.5 text-sm font-bold text-base-700 dark:text-base-200 hover:bg-brand-500/10 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">
-                  {item.label}
+                  {label}
                 </Link>
               ))}
             </nav>
@@ -254,15 +303,15 @@ export function PublicShell({ children }: { children: ReactNode }) {
 
       <main className="flex-1">{children}</main>
 
-      <footer className="border-t border-base-200 dark:border-base-800 bg-base-100/60 dark:bg-base-925 mt-16">
+      <footer className="surface-footer border-t mt-16">
         <div className="mx-auto grid max-w-7xl gap-10 px-4 py-12 sm:px-6 md:grid-cols-[1.3fr_1fr_1fr]">
           <div>
             <Logo />
             <p className="mt-3 max-w-sm text-sm leading-6 text-base-500 dark:text-base-400">{getSetting('slogan') || getSetting('footer_text')}</p>
             <div className="mt-4 flex gap-2">
               {([['facebook', getSetting('social_facebook')], ['instagram', getSetting('social_instagram')], ['youtube', getSetting('social_youtube')], ['tiktok', getSetting('social_tiktok')]] as const)
-                .filter(([, url]) => url).map(([icon, url]) => (
-                  <a key={icon} href={url} target="_blank" rel="noopener noreferrer" className="flex h-9 w-9 items-center justify-center rounded-lg border border-base-200 dark:border-base-700 text-base-500 hover:border-brand-500 hover:text-brand-500 transition-colors">
+                .filter(([, url]) => safeHref(url)).map(([icon, url]) => (
+                  <a key={icon} href={safeHref(url)} target="_blank" rel="noopener noreferrer" className={`flex h-9 w-9 items-center justify-center rounded-lg transition-transform hover:scale-110 ${iconTone(icon)} ${iconToneBg(icon)}`}>
                     <Icon name={icon} size={16} />
                   </a>
                 ))}
@@ -279,9 +328,9 @@ export function PublicShell({ children }: { children: ReactNode }) {
           <div>
             <p className="label">{t('contact')}</p>
             <ul className="mt-2 space-y-2.5 text-sm text-base-500 dark:text-base-400">
-              <li className="flex items-start gap-2"><Icon name="map-pin" size={15} className="mt-0.5 shrink-0 text-brand-500" />{getSetting('address')}</li>
-              <li className="flex items-center gap-2"><Icon name="mail" size={15} className="text-brand-500" />{getSetting('email')}</li>
-              <li className="flex items-center gap-2"><Icon name="phone" size={15} className="text-brand-500" />{getSetting('phone')}</li>
+              <li className="flex items-start gap-2"><Icon name="map-pin" size={15} className={`mt-0.5 shrink-0 ${iconTone('map-pin')}`} />{getSetting('address')}</li>
+              <li className="flex items-center gap-2"><Icon name="mail" size={15} className={iconTone('mail')} />{getSetting('email')}</li>
+              <li className="flex items-center gap-2"><Icon name="phone" size={15} className={iconTone('phone')} />{getSetting('phone')}</li>
             </ul>
           </div>
         </div>
@@ -296,97 +345,63 @@ export function PublicShell({ children }: { children: ReactNode }) {
 
 /* ================= dashboard shell ================= */
 
-export interface NavItem { to: string; label: string; icon: IconName; perm?: string; end?: boolean; }
-export interface NavGroup { label: string; items: NavItem[]; }
+export interface NavItem { to: string; label: string; icon: IconName; end?: boolean; }
+export interface NavGroup { label: string; icon?: IconName; items: NavItem[]; }
 
-export function dashboardNav(roleKey: string, perms: string[]): NavGroup[] {
-  const has = (p: string) => perms.includes('*') || perms.includes(p);
-  const staff = roleKey === 'super_admin' || roleKey === 'admin';
-  const all: NavGroup[] = [
-    { label: '', items: [{ to: '/dashboard', label: 'Dashboard', icon: 'grid', end: true }] },
-    { label: 'Pembelajaran', items: [
-      { to: '/dashboard/my-learning', label: 'Pembelajaranku', icon: 'grad-cap', perm: 'learn' },
-      { to: '/dashboard/digital', label: 'Produk Digital', icon: 'download', perm: 'learn' },
-      { to: '/dashboard/certificates', label: 'Sertifikat Saya', icon: 'award', perm: 'student_certificates' },
-      { to: '/dashboard/orders', label: 'Order Saya', icon: 'receipt', perm: 'student_orders' },
-    ]},
-    { label: 'Akademik', items: [
-      { to: '/dashboard/courses', label: 'Kelas', icon: 'book', perm: roleKey === 'instructor' ? 'instructor_courses' : 'manage_courses' },
-      { to: '/dashboard/categories', label: 'Kategori', icon: 'tag', perm: 'manage_categories' },
-      { to: '/dashboard/quizzes', label: 'Quiz', icon: 'target', perm: roleKey === 'instructor' ? 'instructor_quizzes' : 'manage_quizzes' },
-      { to: '/dashboard/certificates', label: 'Sertifikat', icon: 'award', perm: roleKey === 'instructor' ? 'instructor_certificates' : 'manage_certificates' },
-      { to: '/dashboard/students', label: 'Student Kelas', icon: 'users', perm: roleKey === 'instructor' ? 'instructor_students' : undefined },
-    ]},
-    { label: 'Konten', items: [
-      { to: '/dashboard/articles', label: 'Artikel', icon: 'file-text', perm: 'manage_articles' },
-      { to: '/dashboard/news', label: 'Berita', icon: 'news', perm: 'manage_news' },
-      { to: '/dashboard/tutorials', label: 'Tutorial', icon: 'book-open', perm: 'manage_tutorials' },
-      { to: '/dashboard/activities', label: 'Kegiatan', icon: 'calendar', perm: 'manage_activities' },
-    ]},
-    { label: 'Toko & Order', items: [
-      { to: '/dashboard/products', label: 'Produk', icon: 'bag', perm: 'manage_shop' },
-      { to: '/dashboard/vouchers', label: 'Voucher', icon: 'tag', perm: 'manage_vouchers' },
-      { to: '/dashboard/orders', label: 'Orders', icon: 'receipt', perm: staff ? 'manage_orders' : 'instructor_wallet' },
-      { to: '/dashboard/payments', label: 'Pembayaran', icon: 'card', perm: 'view_payments' },
-    ]},
-    { label: 'Keuangan', items: [
-      { to: '/dashboard/wallet', label: 'Dompet', icon: 'wallet', perm: 'instructor_wallet' },
-      { to: '/dashboard/withdrawals', label: 'Withdrawal', icon: 'banknote', perm: roleKey === 'instructor' ? 'instructor_withdrawals' : 'process_withdrawals' },
-    ]},
-    { label: 'Pengguna', items: [
-      { to: '/dashboard/students', label: 'Students', icon: 'users', perm: 'manage_students' },
-      { to: '/dashboard/instructors', label: 'Instructors', icon: 'grad-cap', perm: 'manage_instructors' },
-      { to: '/dashboard/users', label: 'Semua User', icon: 'shield', perm: '*' },
-      { to: '/dashboard/messages', label: 'Pesan Masuk', icon: 'chat', perm: 'view_messages' },
-    ]},
-    { label: 'Website', items: [
-      { to: '/dashboard/homepage', label: 'Homepage', icon: 'layout', perm: 'manage_homepage' },
-      { to: '/dashboard/menus', label: 'Menu', icon: 'list', perm: 'manage_menus' },
-      { to: '/dashboard/pages', label: 'Halaman', icon: 'file', perm: 'manage_pages' },
-      { to: '/dashboard/about', label: 'Tentang Kami', icon: 'info', perm: 'manage_about' },
-      { to: '/dashboard/media', label: 'Media', icon: 'image', perm: 'manage_media' },
-    ]},
-    { label: 'Pengaturan', items: [
-      { to: '/dashboard/settings', label: 'Umum', icon: 'gear', perm: '*' },
-      { to: '/dashboard/settings-payments', label: 'Payment Gateway', icon: 'card', perm: '*' },
-      { to: '/dashboard/settings-language', label: 'Bahasa & Wilayah', icon: 'globe', perm: '*' },
-      { to: '/dashboard/settings-system', label: 'Sistem & Audit', icon: 'server', perm: '*' },
-    ]},
-    { label: 'Akun', items: [
-      { to: '/dashboard/profile', label: 'Profil Saya', icon: 'user' },
-    ]},
-  ];
-  return all
-    .map((g) => ({ ...g, items: g.items.filter((i) => !i.perm || has(i.perm)) }))
-    .filter((g) => g.items.length > 0);
+const SECTION_ICON: Record<SectionKey, IconName> = {
+  root: 'grid', sec_learning: 'grad-cap', sec_teaching: 'book-open', sec_finance: 'wallet', sec_academic: 'book-open',
+  sec_content: 'file-text', sec_commerce: 'bag', sec_people: 'users', sec_website: 'layout', sec_settings: 'gear',
+  sec_platform: 'gear', sec_account: 'user',
+};
+
+function splitTo(to: string): { pathname: string; search: string } {
+  const qIdx = to.indexOf('?');
+  return qIdx === -1 ? { pathname: to, search: '' } : { pathname: to.slice(0, qIdx), search: to.slice(qIdx + 1) };
+}
+
+function isNavItemActive(item: NavItem, pathname: string, search: string): boolean {
+  const { pathname: toPath, search: toSearch } = splitTo(item.to);
+  const pathMatches = item.end ? pathname === toPath : (pathname === toPath || pathname.startsWith(`${toPath}/`));
+  if (!pathMatches) return false;
+  if (!toSearch) return true;
+  const current = new URLSearchParams(search);
+  const target = new URLSearchParams(toSearch);
+  for (const [k, v] of target) { if (current.get(k) !== v) return false; }
+  return true;
+}
+
+function navIconTone(icon: IconName): string {
+  const tone = iconTone(icon);
+  return tone === 'text-brand-500' ? 'text-base-400' : tone;
 }
 
 function NotifBell() {
-  const { user } = useApp();
+  const { user, t } = useApp();
   const [open, setOpen] = useState(false);
   const [notifs, setNotifs] = useState<Notification[]>([]);
+  const [unread, setUnread] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
-  useClickOutside(ref, () => setOpen(false));
-  useEffect(() => { if (user) void api.notifications().then(setNotifs).catch(() => setNotifs([])); }, [user]);
-  if (!user) return null;
-  const unread = notifs.filter((n) => !n.read).length;
   const nav = useNavigate();
+  useClickOutside(ref, () => setOpen(false));
+  const load = () => { void api.notifications({ per_page: 12 }).then((result) => { setNotifs(result.page.items); setUnread(result.unread); }).catch(() => { setNotifs([]); setUnread(0); }); };
+  useEffect(() => { if (user) load(); }, [user?.id]);
+  if (!user) return null;
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(!open)} title="Notifikasi" className="relative flex h-9 w-9 items-center justify-center rounded-lg text-base-500 hover:bg-base-200/70 hover:text-base-900 dark:hover:bg-base-800 dark:hover:text-base-100 transition-colors cursor-pointer">
+      <button onClick={() => { if (!open) load(); setOpen(!open); }} title={t('notifications')} className="relative flex h-9 w-9 items-center justify-center rounded-lg text-base-500 hover:bg-base-200/70 hover:text-base-900 dark:hover:bg-base-800 dark:hover:text-base-100 transition-colors cursor-pointer">
         <Icon name="bell" size={17} />
         {unread > 0 && <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger-500 px-1 font-mono text-[9px] font-bold text-white">{unread}</span>}
       </button>
       {open && (
         <div className="absolute right-0 top-11 z-50 w-[min(92vw,360px)] card anim-scale overflow-hidden">
           <div className="flex items-center justify-between border-b border-base-200 dark:border-base-800 px-4 py-2.5">
-            <p className="font-display text-sm font-bold text-base-900 dark:text-base-50">Notifikasi</p>
-            {unread > 0 && <button className="text-[11px] font-bold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer" onClick={() => void api.readAllNotifications().then(() => setNotifs((items) => items.map((item) => ({ ...item, read: true }))))}>Tandai dibaca</button>}
+            <p className="font-display text-sm font-bold text-base-900 dark:text-base-50">{t('notifications')}</p>
+            {unread > 0 && <button className="text-[11px] font-bold text-brand-600 dark:text-brand-400 hover:underline cursor-pointer" onClick={() => void api.readAllNotifications().then(() => { setNotifs((items) => items.map((item) => ({ ...item, read: true }))); setUnread(0); })}>{t('mark_all_read')}</button>}
           </div>
           <div className="max-h-80 overflow-y-auto">
-            {notifs.length === 0 && <p className="px-4 py-8 text-center text-sm text-base-400">Belum ada notifikasi.</p>}
-            {notifs.slice(0, 12).map((n) => (
-              <button key={n.id} onClick={() => { void api.readNotification(n.id).then(() => setNotifs((items) => items.map((item) => item.id === n.id ? { ...item, read: true } : item))); if (n.link) { nav(n.link); setOpen(false); } }}
+            {notifs.length === 0 && <p className="px-4 py-8 text-center text-sm text-base-400">{t('no_notifications')}</p>}
+            {notifs.map((n) => (
+              <button key={n.id} onClick={() => { if (!n.read) void api.readNotification(n.id).then(() => { setNotifs((items) => items.map((item) => item.id === n.id ? { ...item, read: true } : item)); setUnread((c) => Math.max(0, c - 1)); }); if (n.link) { nav(n.link); setOpen(false); } }}
                 className={`flex w-full items-start gap-2.5 px-4 py-3 text-left transition-colors hover:bg-brand-500/[0.05] cursor-pointer border-b border-base-100 dark:border-base-800/60 ${!n.read ? 'bg-brand-500/[0.04]' : ''}`}>
                 <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${!n.read ? 'bg-brand-500' : 'bg-base-300 dark:bg-base-700'}`} />
                 <span className="flex-1 min-w-0">
@@ -397,6 +412,7 @@ function NotifBell() {
               </button>
             ))}
           </div>
+          <Link to="/dashboard/notifications" onClick={() => setOpen(false)} className="block border-t border-base-200 dark:border-base-800 px-4 py-2.5 text-center text-xs font-bold text-brand-600 dark:text-brand-400 hover:bg-brand-500/[0.05]">{t('see_all')}</Link>
         </div>
       )}
     </div>
@@ -404,6 +420,7 @@ function NotifBell() {
 }
 
 function GlobalSearchBox() {
+  const { t } = useApp();
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -419,7 +436,7 @@ function GlobalSearchBox() {
     <div className="relative hidden md:block w-72" ref={ref}>
       <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-base-400" />
       <input value={q} onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true); }}
-        placeholder="Cari kelas, artikel, user…" className="input pl-9 py-2 text-sm bg-base-100/70 dark:bg-base-850 border-transparent focus:bg-white dark:focus:bg-base-900" />
+        placeholder={t('search_placeholder')} className="input pl-9 py-2 text-sm bg-base-100/70 dark:bg-base-850 border-transparent focus:bg-white dark:focus:bg-base-900" />
       {open && q.trim().length >= 2 && (
         <div className="absolute inset-x-0 top-11 card p-1.5 z-50 anim-scale">
           {results.length === 0 && <p className="px-3 py-4 text-center text-xs text-base-400">Tidak ada hasil untuk "{q}".</p>}
@@ -470,39 +487,72 @@ function ProfileMenu() {
 
 export function DashShell({ children, title }: { children: ReactNode; title?: string }) {
   const { user, t } = useApp();
-  useDB();
+  useSettingsVersion();
   const [mobileNav, setMobileNav] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const loc = useLocation();
+  const groups: NavGroup[] = groupedMenu(user).map((group) => ({
+    label: group.section === 'root' ? '' : t(group.section), icon: SECTION_ICON[group.section],
+    items: group.items.map((entry) => ({ to: entry.route, label: t(entry.labelKey), icon: entry.icon, end: entry.end })),
+  }));
+  useEffect(() => {
+    const activeGroup = groups.find((group) => group.items.some((item) => isNavItemActive(item, loc.pathname, loc.search)));
+    if (activeGroup?.label) setCollapsed(Object.fromEntries(groups.filter((group) => group.label).map((group) => [group.label, group.label !== activeGroup.label])));
+  }, [loc.pathname, loc.search]);
   if (!user) return null;
-  const role = db.find('roles', (r) => r.key === user.roleKey);
-  const groups = dashboardNav(user.roleKey, role?.permissions ?? []);
 
-  const sidebar = (
+  const sidebar = (compact = sidebarCollapsed) => (
     <div className="flex h-full flex-col">
       <div className="flex h-16 items-center justify-between border-b border-base-200 dark:border-base-800 px-4">
         <Logo compact />
-        <span className="font-display text-sm font-bold text-base-900 dark:text-base-50 truncate">{getSetting('site_name', 'KMSIT')}</span>
+        {!compact && <span className="font-display text-sm font-bold text-base-900 dark:text-base-50 truncate">{getSetting('site_name', 'KMSIT')}</span>}
       </div>
-      <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {groups.map((g) => {
+      <nav className={`flex-1 overflow-y-auto py-4 ${compact ? 'px-2' : 'px-3'}`}>
+        {groups.map((g, gi) => {
           const isCollapsed = collapsed[g.label];
+          const groupActive = g.items.some((item) => isNavItemActive(item, loc.pathname, loc.search));
+          const dividerCls = gi > 0 ? 'mt-1 border-t border-base-200 dark:border-base-800 pt-3' : '';
+
+          if (!g.label) {
+            return (
+              <div key="root" className={dividerCls}>
+                {g.items.map((item) => {
+                  const active = isNavItemActive(item, loc.pathname, loc.search);
+                  return (
+                    <NavLink key={item.to} to={item.to} end={item.end} title={compact ? item.label : undefined} onClick={() => setMobileNav(false)}
+                      className={`mb-2 flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-bold transition-all duration-150 ${compact ? 'justify-center' : ''} ${active ? 'surface-sidebar-active bg-brand-500/12 text-brand-700 dark:text-brand-400' : 'text-base-500 dark:text-base-400 hover:bg-base-100 dark:hover:bg-base-850 hover:text-base-900 dark:hover:text-base-100'}`}>
+                      <Icon name={item.icon} size={16} className={`shrink-0 ${navIconTone(item.icon)}`} />
+                      {!compact && item.label}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            );
+          }
+
           return (
-            <div key={g.label || 'root'} className="mb-3">
-              {g.label && (
-                <button onClick={() => setCollapsed((c) => ({ ...c, [g.label]: !c[g.label] }))}
-                  className="mb-1 flex w-full items-center justify-between px-2 text-[10px] font-bold uppercase tracking-widest text-base-400 hover:text-base-600 dark:hover:text-base-300 transition-colors cursor-pointer">
-                  {g.label}
-                  <Icon name="chevron-down" size={11} className={`transition-transform ${isCollapsed ? '-rotate-90' : ''}`} />
-                </button>
-              )}
-              {!isCollapsed && g.items.map((item) => (
-                <NavLink key={item.to} to={item.to} end={item.end} onClick={() => setMobileNav(false)}
-                  className={({ isActive }) => `group mb-0.5 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] font-bold transition-all duration-150 ${isActive ? 'bg-brand-500/12 text-brand-700 dark:text-brand-400 shadow-[inset_2px_0_0_var(--color-brand-500)]' : 'text-base-500 dark:text-base-400 hover:bg-base-100 dark:hover:bg-base-850 hover:text-base-900 dark:hover:text-base-100'}`}>
-                  <Icon name={item.icon} size={16} className="shrink-0" />
-                  {item.label}
-                </NavLink>
-              ))}
+            <div key={g.label} className={`mb-3 rounded-xl border-transparent bg-transparent p-1.5 ${dividerCls}`}>
+              <button
+                onClick={() => { if (compact) { setSidebarCollapsed(false); setCollapsed((c) => ({ ...c, [g.label]: false })); return; } setCollapsed((c) => ({ ...c, [g.label]: !c[g.label] })); }}
+                title={compact ? g.label : undefined}
+                className={`mb-1.5 flex w-full items-center rounded-lg transition-all cursor-pointer ${compact ? 'justify-center px-1 py-1.5' : 'justify-between px-2'} ${groupActive ? 'text-[13px] font-extrabold text-base-900 dark:text-base-50' : 'text-[10px] font-bold uppercase tracking-[0.18em] text-base-400 hover:text-base-600 dark:hover:text-base-300'}`}>
+                <span className="flex items-center gap-2">
+                  <Icon name={g.icon ?? 'list'} size={groupActive ? 17 : 15} className={groupActive ? 'text-brand-500' : (g.icon ? navIconTone(g.icon) : 'text-base-400')} />
+                  {!compact && g.label}
+                </span>
+                {!compact && <Icon name="chevron-down" size={11} className={`transition-transform ${isCollapsed ? '-rotate-90' : ''}`} />}
+              </button>
+              {!compact && !isCollapsed && g.items.map((item) => {
+                const active = isNavItemActive(item, loc.pathname, loc.search);
+                return (
+                  <NavLink key={item.to} to={item.to} end={item.end} onClick={() => { setMobileNav(false); setCollapsed(Object.fromEntries(groups.filter((group) => group.label).map((group) => [group.label, group.label !== g.label]))); }}
+                    className={`group mb-1 flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] font-bold transition-all duration-150 ${active ? 'surface-sidebar-active bg-brand-500/12 text-brand-700 dark:text-brand-400' : 'text-base-500 dark:text-base-400 hover:bg-base-100 dark:hover:bg-base-850 hover:text-base-900 dark:hover:text-base-100'}`}>
+                    <Icon name={item.icon} size={16} className={`shrink-0 ${navIconTone(item.icon)}`} />
+                    {item.label}
+                  </NavLink>
+                );
+              })}
             </div>
           );
         })}
@@ -517,23 +567,33 @@ export function DashShell({ children, title }: { children: ReactNode; title?: st
   );
 
   return (
-    <div className="flex min-h-screen bg-base-50 dark:bg-base-950">
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-60 border-r border-base-200 dark:border-base-800 bg-white dark:bg-base-900 lg:block">{sidebar}</aside>
+    <div className="flex min-h-screen" data-theme-scope="dashboard">
+      <ThemeVarsInjector surface="dashboard" />
+      <aside className={`surface-sidebar fixed inset-y-0 left-0 z-30 hidden border-r lg:block transition-[width] duration-200 ${sidebarCollapsed ? 'w-16' : 'w-60'}`}>{sidebar()}</aside>
       {mobileNav && (
         <div className="fixed inset-0 z-[80] lg:hidden">
           <div className="absolute inset-0 bg-base-950/60 backdrop-blur-sm anim-fade" onClick={() => setMobileNav(false)} />
-          <aside className="absolute inset-y-0 left-0 w-64 bg-white dark:bg-base-900 border-r border-base-200 dark:border-base-800 anim-slide">{sidebar}</aside>
+          <aside className="surface-sidebar absolute inset-y-0 left-0 w-64 border-r anim-slide">{sidebar(false)}</aside>
         </div>
       )}
-      <div className="flex min-h-screen flex-1 flex-col lg:pl-60">
-        <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-base-200 dark:border-base-800 bg-white/85 dark:bg-base-925/85 backdrop-blur-md px-4 sm:px-6">
+      <div className={`flex min-h-screen flex-1 flex-col transition-[padding] duration-200 ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'}`}>
+        <header className="surface-topbar sticky top-0 z-20 flex h-16 items-center gap-3 border-b backdrop-blur-md px-4 sm:px-6">
           <button className="lg:hidden p-1.5 -ml-1 text-base-500 hover:text-base-900 dark:hover:text-base-100 cursor-pointer" onClick={() => setMobileNav(true)} aria-label="Navigasi"><Icon name="menu" size={20} /></button>
+          <button className="hidden lg:flex h-9 w-9 items-center justify-center rounded-lg text-base-500 hover:bg-base-200 dark:hover:bg-base-800 hover:text-base-900 dark:hover:text-base-100 cursor-pointer" onClick={() => setSidebarCollapsed((value) => !value)} aria-label={sidebarCollapsed ? 'Perbesar sidebar' : 'Kecilkan sidebar'} title={sidebarCollapsed ? 'Perbesar sidebar' : 'Kecilkan sidebar'}><Icon name="menu" size={18} /></button>
           <div className="hidden sm:block min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-widest text-base-400">{t('dashboard')}</p>
             <p className="truncate font-display text-sm font-bold text-base-900 dark:text-base-50">{title ?? 'Dashboard'}</p>
           </div>
           <div className="ml-auto flex items-center gap-1.5">
             <GlobalSearchBox />
+            <a href="/" target="_blank" rel="noopener noreferrer" title="Lihat Website" aria-label="Lihat Website"
+              className="hidden sm:flex h-9 items-center gap-1.5 rounded-lg px-3 text-[13px] font-bold text-base-500 hover:bg-base-200 dark:hover:bg-base-800 hover:text-base-900 dark:hover:text-base-100 transition-colors cursor-pointer">
+              <Icon name="globe" size={16} /> Lihat Website <Icon name="external" size={12} className="text-base-400" />
+            </a>
+            <a href="/" target="_blank" rel="noopener noreferrer" title="Lihat Website" aria-label="Lihat Website"
+              className="sm:hidden flex h-9 w-9 items-center justify-center rounded-lg text-base-500 hover:bg-base-200 dark:hover:bg-base-800 hover:text-base-900 dark:hover:text-base-100 cursor-pointer">
+              <Icon name="globe" size={18} />
+            </a>
             <LangToggle />
             <ThemeToggle />
             <NotifBell />

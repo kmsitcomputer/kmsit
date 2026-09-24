@@ -7,19 +7,6 @@ import { useApp } from '../state/store';
 
 interface Req { label: string; detail: string; ok: boolean; }
 
-function checkRequirements(): Req[] {
-  return [
-    { label: 'Runtime Environment', detail: 'Browser runtime (setara PHP ≥ 8.2)', ok: typeof window !== 'undefined' },
-    { label: 'Crypto / Hashing', detail: 'WebCrypto SHA-256 (setara OpenSSL)', ok: !!window.crypto?.subtle },
-    { label: 'Backend Database', detail: 'Laravel API dan database server tersedia', ok: typeof fetch === 'function' },
-    { label: 'Structured Data / JSON', detail: 'JSON & DOMParser (setara mbstring/xml)', ok: typeof JSON !== 'undefined' && typeof DOMParser !== 'undefined' },
-    { label: 'Canvas / GD', detail: 'HTMLCanvasElement (setara ext-gd)', ok: !!document.createElement('canvas').getContext },
-    { label: 'Intl / ICU', detail: 'NumberFormat & DateTimeFormat', ok: typeof Intl !== 'undefined' },
-    { label: 'Network / cURL', detail: 'Fetch API tersedia', ok: typeof fetch === 'function' },
-    { label: 'Storage Permission', detail: 'storage/ & bootstrap/cache writable', ok: true },
-  ];
-}
-
 const TABLES = ['users', 'roles', 'permissions', 'role_user', 'profiles', 'instructors', 'courses', 'course_categories', 'course_sections', 'lessons', 'enrollments', 'lesson_progress', 'quizzes', 'quiz_questions', 'quiz_attempts', 'certificates', 'certificate_templates', 'articles', 'news', 'tutorials', 'activities', 'pages', 'homepage_sections', 'menus', 'menu_items', 'media', 'orders', 'order_items', 'payments', 'payment_transactions', 'instructor_wallets', 'wallet_transactions', 'withdrawals', 'products', 'carts', 'notifications', 'settings', 'audit_logs'];
 
 export default function Installer() {
@@ -46,8 +33,7 @@ export default function Installer() {
 
   useEffect(() => {
     if (step === 1 && !reqs) {
-      const all = checkRequirements();
-      all.forEach((_, i) => setTimeout(() => setReqs((prev) => [...(prev ?? []), all[i]]), 180 * i + 150));
+      void api.installRequirements().then((res) => setReqs(res.checks)).catch(() => setReqs([{ label: 'Server tidak terjangkau', detail: 'Gagal memuat status server. Periksa konfigurasi web server / PHP.', ok: false }]));
     }
   }, [step, reqs]);
 
@@ -56,15 +42,20 @@ export default function Installer() {
 
   if (backendInstalled && !justInstalled) return <Navigate to="/" replace />;
 
-  const allPass = reqs !== null && reqs.length === checkRequirements().length && reqs.every((r) => r.ok);
+  const allPass = reqs !== null && reqs.length > 0 && reqs.every((r) => r.ok);
 
   const testDb = async () => {
     setErrors({});
     if (!dbForm.host || !dbForm.database || !dbForm.username) { setErrors({ db: 'Host, nama database, dan username wajib diisi.' }); setDbTest('fail'); return; }
-    setDbTest('testing');
-    await new Promise((r) => setTimeout(r, 1100));
     if (!/^\d+$/.test(dbForm.port)) { setDbTest('fail'); setErrors({ db: 'Port harus berupa angka.' }); return; }
-    setDbTest('ok');
+    setDbTest('testing');
+    try {
+      await api.installTestDb(dbForm);
+      setDbTest('ok');
+    } catch (error) {
+      setDbTest('fail');
+      setErrors({ db: error instanceof Error ? error.message : 'Koneksi database gagal.' });
+    }
   };
 
   const validateSite = () => {
@@ -85,10 +76,17 @@ export default function Installer() {
     const line = async (msg: string, ms = 320) => { setLogs((l) => [...l, msg]); setProgress((p) => Math.min(100, p + ms / 22)); await new Promise((r) => setTimeout(r, ms)); };
 
     setLogs([]);
-    await line('$ php artisan kmsit:install');
+    await line('$ kmsit install');
     await line('> Menulis konfigurasi .env (APP_KEY, DB_CONNECTION=mysql…)');
+    try {
+      await api.installConfigure({ host: dbForm.host, port: dbForm.port, database: dbForm.database, username: dbForm.username, password: dbForm.password, site_url: site.siteUrl.trim() || undefined });
+    } catch (error) {
+      await line(`✗ Gagal menulis .env: ${error instanceof Error ? error.message : 'server error'}`, 300);
+      setInstalling(false);
+      return;
+    }
     await line(`> Database: mysql://${dbForm.username}@${dbForm.host}:${dbForm.port}/${dbForm.database} … OK`);
-    await line('> APP_KEY server configuration verified');
+    await line('> APP_KEY server configuration written');
     await line('> Migrating: 0001_01_01_create_core_tables … DONE');
     for (let i = 0; i < TABLES.length; i += 4) {
       await line(`> Migrating: ${TABLES.slice(i, i + 4).map((t) => `\`${t}\``).join(', ')} … DONE`, 200);
@@ -107,6 +105,7 @@ export default function Installer() {
       setInstalling(false);
       return;
     }
+    window.dispatchEvent(new Event('kmsit-installed'));
     setJustInstalled(true);
     await new Promise((r) => setTimeout(r, 700));
     setStep(5);
@@ -191,7 +190,7 @@ export default function Installer() {
                     <span className={`badge ${r.ok ? 'bg-ok-500/15 text-ok-400' : 'bg-danger-500/15 text-danger-400'}`}>{r.ok ? 'PASS' : 'FAIL'}</span>
                   </li>
                 ))}
-                {reqs === null || reqs.length < checkRequirements().length ? (
+                {reqs === null ? (
                   <li className="flex items-center gap-2 px-3 py-2 text-sm text-base-400"><Spinner size={14} /> Memeriksa…</li>
                 ) : null}
               </ul>

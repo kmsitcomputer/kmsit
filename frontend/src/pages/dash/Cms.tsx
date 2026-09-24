@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { db, uid, now, type HomeBlock, type BlockType, type Menu, type MenuItem, type ID } from '../../lib/db';
-import { audit, getSetting, setSettings } from '../../lib/services';
-import { useApp, useDB } from '../../state/store';
-import { api } from '../../lib/api';
+import type { HomeBlock, BlockType, Menu, MenuItem, ID } from '../../lib/types';
+import { getSetting } from '../../lib/settings';
+import { useApp } from '../../state/store';
+import { api, type ApiContentRow } from '../../lib/api';
 import { Icon, type IconName } from '../../components/icons';
 import RichText from '../../components/RichText';
 import { Badge, Confirm, EmptyState, Field, IconButton, MediaPicker, Modal, PageHeader, Select, Tabs, TextArea, TextInput, Toggle } from '../../components/ui';
@@ -79,7 +79,7 @@ export function HomepageBuilder() {
     void Promise.all([api.updateHomepageBlock(orderedBlocks[i].id, { sort: orderedBlocks[j].order }), api.updateHomepageBlock(orderedBlocks[j].id, { sort: orderedBlocks[i].order })]).then(refreshBlocks);
   };
   const addBlock = (type: BlockType) => {
-    void api.createHomepageBlock({ type, enabled: true, sort: blocks.length, content: {} }).then(() => { audit(user.id, user.name, 'create', 'homepage_block', null, `Menambah blok ${type}`); toast('success', `Blok ${BLOCK_META[type].label} ditambahkan.`); refreshBlocks(); setAdding(false); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menambah blok.'));
+    void api.createHomepageBlock({ type, enabled: true, sort: blocks.length, content: {} }).then(() => { toast('success', `Blok ${BLOCK_META[type].label} ditambahkan.`); refreshBlocks(); setAdding(false); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menambah blok.'));
   };
 
   return (
@@ -138,6 +138,8 @@ export function MenusPage() {
   const [menus, setMenus] = useState<Array<Menu & { items: MenuItem[] }>>([]);
   const refreshMenus = () => { void api.menuGroups().then(setMenus).catch(() => setMenus([])); };
   useEffect(refreshMenus, []);
+  const [pages, setPages] = useState<ApiContentRow[]>([]);
+  useEffect(() => { void api.content('pages').then(setPages).catch(() => setPages([])); }, []);
   const [menuId, setMenuId] = useState<ID>(menus[0]?.id ?? '');
   useEffect(() => { if (!menuId && menus[0]) setMenuId(menus[0].id); }, [menus, menuId]);
   const [modal, setModal] = useState<{ item: MenuItem | null } | null>(null);
@@ -167,12 +169,22 @@ export function MenusPage() {
     void Promise.all([api.updateMenuItem(siblings[i].id, { sort: j }), api.updateMenuItem(siblings[j].id, { sort: i })]).then(refreshMenus).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal mengurutkan menu.'));
   };
 
+  const createMenu = (name: string, location: 'header' | 'footer') => {
+    void api.createMenu(name, location).then((created) => { toast('success', `${name} dibuat.`); refreshMenus(); setMenuId(created.id); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal membuat menu.'));
+  };
+  const hasHeader = menus.some((m) => m.location === 'header' || m.location === 'both');
+  const hasFooter = menus.some((m) => m.location === 'footer' || m.location === 'both');
+
   return (
     <DashShell title="Menu">
       <PageHeader title="Menu" sub="Kelola menu navigasi website — header & footer."
         actions={<button className="btn-primary" onClick={() => openModal(null)} disabled={!menu}><Icon name="plus" size={15} /> Item Menu</button>} />
-      <div className="mb-4"><Tabs tabs={menus.map((m) => ({ key: m.id, label: `${m.name} (${m.location})` }))} active={menuId} onChange={setMenuId} /></div>
-      {!menu ? <EmptyState icon="list" title="Belum ada menu" /> : (
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Tabs tabs={menus.map((m) => ({ key: m.id, label: `${m.name} (${m.location})` }))} active={menuId} onChange={setMenuId} />
+        {!hasHeader && <button className="btn-outline btn-sm" onClick={() => createMenu('Header Menu', 'header')}><Icon name="plus" size={13} /> Buat Menu Header</button>}
+        {!hasFooter && <button className="btn-outline btn-sm" onClick={() => createMenu('Footer Menu', 'footer')}><Icon name="plus" size={13} /> Buat Menu Footer</button>}
+      </div>
+      {!menu ? <EmptyState icon="list" title="Belum ada menu" sub="Buat menu Header atau Footer terlebih dahulu." /> : (
         <div className="card overflow-hidden anim-rise">
           {items.length === 0 ? <div className="p-6"><EmptyState icon="list" title="Menu kosong" sub="Tambahkan item menu pertamamu." /></div> : (
             <ul>
@@ -207,7 +219,7 @@ export function MenusPage() {
           {f.type === 'page' && (
             <Field label="Pilih Halaman"><Select value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })}>
               <option value="">— pilih —</option>
-              {db.all('pages').map((p) => <option key={p.id} value={p.slug}>{p.title}</option>)}
+              {pages.map((p) => <option key={p.id} value={p.slug}>{p.title}</option>)}
             </Select></Field>
           )}
           {f.type === 'custom' && <Field label="URL" required><TextInput value={f.target} onChange={(e) => setF({ ...f, target: e.target.value })} placeholder="https://…" className="font-mono text-xs" /></Field>}
@@ -248,15 +260,14 @@ function MenuRow({ item, index, nested, onEdit, onDel, onUp, onDown, onIndent, o
 interface TeamMember { name: string; role: string; photo?: string; }
 
 export function AboutEditor() {
-  useDB();
   const { user, toast } = useApp();
-  const s = db.settings();
+  // Seeded from the public settings already in memory, then replaced by the admin read below.
   const [f, setF] = useState({
-    hero: s.about_hero_title ?? '', sub: s.about_hero_subtitle ?? '', desc: s.about_description ?? '',
-    vision: s.about_vision ?? '', mission: s.about_mission ?? '', history: s.about_history ?? '', video: s.about_video ?? '',
+    hero: getSetting('about_hero_title'), sub: getSetting('about_hero_subtitle'), desc: getSetting('about_description'),
+    vision: getSetting('about_vision'), mission: getSetting('about_mission'), history: getSetting('about_history'), video: getSetting('about_video'),
   });
-  const [team, setTeam] = useState<TeamMember[]>(() => { try { return JSON.parse(s.about_team ?? '[]'); } catch { return []; } });
-  const [gallery, setGallery] = useState<string[]>(() => { try { return JSON.parse(s.about_gallery ?? '[]'); } catch { return []; } });
+  const [team, setTeam] = useState<TeamMember[]>(() => { try { return JSON.parse(getSetting('about_team', '[]')); } catch { return []; } });
+  const [gallery, setGallery] = useState<string[]>(() => { try { return JSON.parse(getSetting('about_gallery', '[]')); } catch { return []; } });
   const [mediaFor, setMediaFor] = useState<'gallery' | number | null>(null);
   useEffect(() => { void api.adminSettings().then((remote) => {
     const value = (key: string) => remote[key] ?? '';
@@ -272,7 +283,7 @@ export function AboutEditor() {
       about_vision: f.vision, about_mission: f.mission, about_history: f.history, about_video: f.video,
       about_team: JSON.stringify(team), about_gallery: JSON.stringify(gallery),
     };
-    void api.updateSettings(settings).then(() => { audit(user.id, user.name, 'update', 'about', null, 'Memperbarui Tentang Kami'); toast('success', 'Tentang Kami diperbarui — cek halaman /about.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan Tentang Kami.'));
+    void api.updateSettings(settings).then(() => { toast('success', 'Tentang Kami diperbarui — cek halaman /about.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan Tentang Kami.'));
   };
 
   return (

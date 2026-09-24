@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
 use App\Models\CertificateTemplate;
+use App\Support\AdminAccess;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -28,5 +29,5 @@ class CertificateTemplateController extends Controller
     {
         $this->admin($request); CertificateTemplate::findOrFail($id)->delete(); return response()->json(['message' => 'Template dihapus.']);
     }
-    private function admin(Request $request): void { abort_unless(in_array($request->user()->role_key, ['admin', 'super_admin'], true), 403, 'Tidak memiliki permission.'); }
+    private function admin(Request $request): void { AdminAccess::authorize($request->user(), 'manage_certificates'); }
 }
