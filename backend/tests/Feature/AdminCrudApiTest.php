@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Course;
+use App\Models\Enrollment;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -153,6 +154,43 @@ class AdminCrudApiTest extends TestCase
         $admin = $this->user('admin', 'dash-admin@example.com');
         $response = $this->actingAs($admin, 'sanctum')->getJson('/api/v1/dashboard/summary')->assertOk();
         $response->assertJsonStructure(['role', 'summary', 'revenue_chart', 'recent_orders']);
+    }
+
+    public function test_owner_instructor_edit_keeps_published_course_live(): void
+    {
+        $this->seed();
+        $instructor = $this->user('instructor', 'published-owner@example.com');
+        $other = $this->user('instructor', 'published-other@example.com');
+        $student = $this->user('student', 'published-student@example.com');
+        $admin = $this->user('admin', 'published-admin@example.com');
+
+        $course = Course::create([
+            'id' => 'pubedit00001', 'slug' => 'published-edit', 'instructor_id' => $instructor->id,
+            'title' => 'Published Course', 'is_free' => true, 'level' => 'beginner',
+            'price' => 0, 'status' => 'published', 'published_at' => now(),
+        ]);
+        Enrollment::create(['id' => 'pubeditenr01', 'user_id' => $student->id, 'course_id' => $course->id, 'status' => 'active']);
+
+        $this->actingAs($student, 'sanctum')->putJson("/api/v1/admin/courses/{$course->id}", [
+            'title' => 'Published Course', 'slug' => 'published-edit', 'price' => 0, 'level' => 'beginner',
+        ])->assertForbidden();
+
+        $this->actingAs($other, 'sanctum')->putJson("/api/v1/admin/courses/{$course->id}", [
+            'title' => 'Published Course', 'slug' => 'published-edit', 'price' => 0, 'level' => 'beginner',
+        ])->assertForbidden();
+
+        $this->actingAs($instructor, 'sanctum')->putJson("/api/v1/admin/courses/{$course->id}", [
+            'title' => 'Published Course Edited', 'slug' => 'published-edit', 'price' => 0, 'level' => 'beginner',
+        ])->assertOk()->assertJsonPath('course.status', 'published');
+
+        $this->actingAs($admin, 'sanctum')->putJson("/api/v1/admin/courses/{$course->id}", [
+            'title' => 'Published Course Admin', 'slug' => 'published-edit', 'price' => 0, 'level' => 'beginner',
+        ])->assertOk()->assertJsonPath('course.status', 'published');
+
+        $this->assertDatabaseHas('courses', ['id' => $course->id, 'status' => 'published', 'title' => 'Published Course Admin']);
+        $this->assertDatabaseHas('enrollments', ['user_id' => $student->id, 'course_id' => $course->id]);
+        $this->actingAs($student, 'sanctum')->getJson('/api/v1/courses/published-edit')
+            ->assertOk()->assertJsonPath('course.enrolled', true);
     }
 
     private function user(string $role, string $email): User
