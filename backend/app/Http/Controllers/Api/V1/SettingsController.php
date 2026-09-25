@@ -139,9 +139,4 @@ class SettingsController extends Controller
         Setting::updateOrCreate(['setting_key' => 'gateway_mode'], ['setting_value' => $data['mode']]);
         return response()->json(['gateway' => $data['gateway'], 'mode' => $data['mode']]);
     }
-
-    private function authorizeAdmin(Request $request): void
-    {
-        abort_unless(in_array($request->user()->role_key, ['admin', 'super_admin'], true), 403, 'Tidak memiliki permission.');
-    }
 }

@@ -110,9 +110,4 @@ class ProductController extends Controller
         if (!empty($data['digital_file_url']) && !FileSecurity::isPathWithin($data['digital_file_url'], 'digital')) abort(422, 'Path file digital tidak valid.');
         return $data;
     }
-
-    private function authorizeAdmin(Request $request): void
-    {
-        abort_unless(in_array($request->user()->role_key, ['admin', 'super_admin'], true), 403, 'Tidak memiliki permission.');
-    }
 }

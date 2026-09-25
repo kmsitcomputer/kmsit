@@ -8,7 +8,7 @@ Dokumen ini untuk operator server. Semua contoh di bawah adalah **contoh konfigu
 |---|---|---|---|---|
 | Queue | `QUEUE_CONNECTION=redis` + worker Supervisor/systemd | `QUEUE_CONNECTION=database` + `QUEUE_SCHEDULER_WORKER=true` (worker dijalankan cron) | `database` atau `sync` | `sync` / `Queue::fake` |
 | Cache & lock scheduler | `CACHE_STORE=redis` | `CACHE_STORE=file` | `database` | `array` |
-| Session | `SESSION_DRIVER=redis` (opsional) atau `file` | `file` | `database` | `array` |
+| Session | `SESSION_DRIVER=file` (tetap di luar Redis — IMP-001) | `file` | `database` | `array` |
 | Mail | `MAIL_MAILER=smtp` | `smtp` | `log` | `array` / `Mail::fake` |
 | Failed jobs | tabel `failed_jobs` (DB) | tabel `failed_jobs` (DB) | sama | SQLite `:memory:` |
 
@@ -51,7 +51,7 @@ cPanel/shared hosting: menu **Cron Jobs**, interval *Once Per Minute*, perintah 
 CACHE_STORE=redis
 QUEUE_CONNECTION=redis
 QUEUE_SCHEDULER_WORKER=false
-SESSION_DRIVER=redis        # opsional
+SESSION_DRIVER=file            # sesi tetap di luar Redis (IMP-001); database juga didukung
 REDIS_CLIENT=phpredis
 REDIS_HOST=127.0.0.1
 REDIS_PORT=6379
@@ -102,7 +102,8 @@ Aktifkan: `systemctl daemon-reload && systemctl enable --now kmsit-worker`.
 
 ## 4. Profil B — Shared hosting tanpa Redis/Supervisor
 
-Default `.env.production.example` (dipakai installer):
+Bila host tidak memiliki Redis/Supervisor, pilih profil fallback secara eksplisit
+(opt-in, bukan otomatis) di `.env`:
 
 ```dotenv
 CACHE_STORE=file
