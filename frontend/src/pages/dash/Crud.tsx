@@ -102,6 +102,7 @@ export const MODULES: Record<string, ModuleDef> = {
       { name: 'price', label: 'Harga', type: 'number', required: true },
       { name: 'discountPrice', label: 'Harga Diskon', type: 'number', hint: '0 = tanpa diskon' },
       { name: 'stock', label: 'Stok', type: 'number', hint: 'Otomatis dari total varian jika ada' },
+      { name: 'weightGrams', label: 'Berat (gram)', type: 'number', hint: 'Wajib untuk produk fisik (ongkir RajaOngkir)' },
       { name: 'isDigital', label: 'Produk Digital', type: 'toggle', hint: 'Dikirim otomatis, tanpa pengiriman barang' },
       { name: 'digitalFileUrl', label: 'File Digital', type: 'media', hint: 'Diberikan ke pembeli setelah pembayaran' },
       { name: 'variants', label: 'Varian Produk', type: 'variants', span2: true, hint: 'cth: ukuran/warna/versi dengan harga & stok masing-masing' },
@@ -134,14 +135,15 @@ function VariantEditor({ value, onChange }: { value: ProductVariant[]; onChange:
         <p className="px-4 py-4 text-xs text-base-400">Tidak ada varian — produk dijual sebagai satu varian dengan harga & stok utama.</p>
       ) : (
         <div className="divide-y divide-base-100 dark:divide-base-800">
-          <div className="grid grid-cols-[1.4fr_1fr_0.8fr_36px] gap-2 px-3 pt-3 pb-1 font-mono text-[9px] uppercase tracking-wider text-base-400">
-            <span>Label Varian</span><span>Harga</span><span>Stok</span><span />
+          <div className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr_36px] gap-2 px-3 pt-3 pb-1 font-mono text-[9px] uppercase tracking-wider text-base-400">
+            <span>Label Varian</span><span>Harga</span><span>Stok</span><span>Berat (g)</span><span />
           </div>
           {rows.map((v) => (
-            <div key={v.id} className="grid grid-cols-[1.4fr_1fr_0.8fr_36px] items-center gap-2 px-3 py-2">
+            <div key={v.id} className="grid grid-cols-[1.4fr_1fr_0.8fr_0.8fr_36px] items-center gap-2 px-3 py-2">
               <TextInput value={v.label} onChange={(e) => upd(v.id, { label: e.target.value })} placeholder="cth: 128 GB / Merah" className="py-1.5 text-xs" />
               <TextInput type="number" min={0} value={v.price || ''} onChange={(e) => upd(v.id, { price: Number(e.target.value) })} className="py-1.5 text-xs font-mono" />
               <TextInput type="number" min={0} value={v.stock || ''} onChange={(e) => upd(v.id, { stock: Number(e.target.value) })} className="py-1.5 text-xs font-mono" />
+              <TextInput type="number" min={0} value={(v as ProductVariant & { weightGrams?: number }).weightGrams || ''} onChange={(e) => upd(v.id, { weightGrams: Number(e.target.value) } as Partial<ProductVariant>)} className="py-1.5 text-xs font-mono" />
               <button className="justify-self-center rounded-md p-1.5 text-base-400 hover:bg-danger-500/12 hover:text-danger-500 cursor-pointer" onClick={() => onChange(rows.filter((x) => x.id !== v.id))} title="Hapus varian">
                 <Icon name="trash" size={13} />
               </button>
@@ -235,8 +237,9 @@ export function ContentModule({ def }: { def: ModuleDef }) {
     setSaving(true);
     let request: Promise<unknown>;
     if (isProduct) {
-      const vs = Array.isArray(form.variants) ? (form.variants as ProductVariant[]).map((v) => ({ label: v.label.trim(), price: Number(v.price) || 0, stock: Number(v.stock) || 0 })).filter((v) => v.label) : [];
-      const payload = { name, slug, description: form.description, thumbnail: form.thumbnail, price: Number(form.price) || 0, discount_price: Number(form.discountPrice) || 0, stock: vs.length > 0 ? vs.reduce((a, v) => a + v.stock, 0) : Number(form.stock) || 0, category_id: form.categoryId || null, status, featured: Boolean(form.featured), is_digital: Boolean(form.isDigital), digital_file_url: form.digitalFileUrl || null, variants: vs };
+      const numOrNull = (v: unknown) => (v === null || v === undefined || v === '' ? null : Number(v) || 0);
+      const vs = Array.isArray(form.variants) ? (form.variants as Array<ProductVariant & { weightGrams?: number }>).map((v) => ({ label: v.label.trim(), price: Number(v.price) || 0, stock: Number(v.stock) || 0, weight_grams: numOrNull(v.weightGrams) })).filter((v) => v.label) : [];
+      const payload = { name, slug, description: form.description, thumbnail: form.thumbnail, price: Number(form.price) || 0, discount_price: Number(form.discountPrice) || 0, stock: vs.length > 0 ? vs.reduce((a, v) => a + v.stock, 0) : Number(form.stock) || 0, weight_grams: numOrNull(form.weightGrams), category_id: form.categoryId || null, status, featured: Boolean(form.featured), is_digital: Boolean(form.isDigital), digital_file_url: form.digitalFileUrl || null, variants: vs };
       request = editing === 'new' ? api.createProduct(payload) : api.updateProduct((editing as Row).id, payload);
     } else {
       const payload = { title: name, slug, excerpt: form.excerpt, description: form.description, content: form.content, thumbnail: form.thumbnail, category_id: form.categoryId || null, video_url: form.videoUrl || null, tags, gallery, event_date: form.eventDate || null, event_time: form.eventTime || null, location: form.location || null, registration_url: form.registrationUrl || null, status };

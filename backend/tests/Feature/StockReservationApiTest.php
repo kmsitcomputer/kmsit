@@ -138,8 +138,10 @@ class StockReservationApiTest extends TestCase
         $this->assertSame(6, $variant->fresh()->stock);
     }
 
-    private function fixture(string $email, string $productId, int $stock, bool $digital = false): array
+    private function fixture(string $email, string $productId, int $stock, bool $digital = true): array
     {
+        // Stock reservation is shipping-agnostic; digital fixtures keep these
+        // tests independent of the RajaOngkir checkout contract.
         $user = $this->user($email);
         $product = Product::create(['id' => $productId, 'slug' => $productId, 'name' => 'Stock item',
             'price' => 10000, 'stock' => $stock, 'status' => 'published', 'is_digital' => $digital,

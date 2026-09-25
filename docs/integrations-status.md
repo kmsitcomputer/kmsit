@@ -18,7 +18,7 @@ Disusun dari audit kode aktual, bukan dari field settings. Klasifikasi:
 | Zoom | Configuration-only | `config/services.php` (`zoom`), `ZOOM_*` env, settings `zoom_*` | Tidak ada service/OAuth/callsite. Tidak diimplementasi pada putaran ini. |
 | Google Meet | Configuration-only | settings `gmeet_enabled`, `gmeet_default_url` | Tidak ada kode yang membaca/memakai. Tidak diimplementasi. |
 | YouTube settings (`youtube_enabled`, `youtube_channel_url`) | Placeholder | `SettingsController` writable keys, `Settings.tsx` | Embed YouTube memakai URL per-konten, bukan setting channel ini. |
-| RajaOngkir / shipping rate | Absent | — | Order fisik hanya menyimpan `shipping_name/address/phone` manual. Tidak ada lookup ongkir. |
+| RajaOngkir / shipping rate | Implemented | `app/Contracts/ShippingProvider.php`, `app/Services/RajaOngkirProvider.php`, `app/Services/ShippingService.php`, `config/shipping.php`, `ShippingController`, `OrderController@storeShop` | Shipping Cost V2 backend-only (header `key:`); origin server-controlled (settings/env); quote dinormalisasi; checkout revalidasi dan snapshot ke `orders`. Tanpa Delivery API (pickup/AWB/tracking). |
 | OpenRouteService / routing | Absent | — | Tidak ada kode/config terkait. |
 
 ## Pemilihan provider & mode (server-side)

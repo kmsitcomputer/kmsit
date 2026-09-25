@@ -35,7 +35,7 @@ class ProductController extends Controller
             $variants = $data['variants'] ?? [];
             unset($data['variants']);
             $product = Product::create(['id' => Str::lower(Str::random(12)), ...$data, 'stock' => collect($variants)->isNotEmpty() ? collect($variants)->sum('stock') : $data['stock']]);
-            foreach ($variants as $index => $variant) ProductVariant::create(['id' => Str::lower(Str::random(12)), 'product_id' => $product->id, 'label' => $variant['label'], 'price' => $variant['price'], 'stock' => $variant['stock'], 'sort' => $index]);
+            foreach ($variants as $index => $variant) ProductVariant::create(['id' => Str::lower(Str::random(12)), 'product_id' => $product->id, 'label' => $variant['label'], 'price' => $variant['price'], 'stock' => $variant['stock'], 'weight_grams' => $variant['weight_grams'] ?? null, 'sort' => $index]);
             return $product->load(['variants', 'category:id,name,slug']);
         });
         return response()->json(['product' => $product], 201);
@@ -68,6 +68,7 @@ class ProductController extends Controller
                 $kept = [];
                 foreach ($variants as $index => $variant) {
                     $attributes = ['price' => $variant['price'], 'stock' => $variant['stock'], 'sort' => $index];
+                    if (array_key_exists('weight_grams', $variant)) $attributes['weight_grams'] = $variant['weight_grams'];
                     $existing = $lockedVariants->get($variant['label']);
                     if ($existing) {
                         if ($existing->fill($attributes)->isDirty()) $existing->save();
@@ -101,10 +102,11 @@ class ProductController extends Controller
         $data = $request->validate([
             'name' => [$required, 'string', 'max:190'], 'slug' => ['nullable', 'string', 'max:140'], 'description' => ['nullable', 'string'],
             'thumbnail' => ['nullable', 'string'], 'price' => [$required, 'integer', 'min:0'], 'discount_price' => ['nullable', 'integer', 'min:0'],
-            'stock' => [$required, 'integer', 'min:0'], 'category_id' => ['nullable', 'string', 'exists:categories,id'],
+            'stock' => [$required, 'integer', 'min:0'], 'weight_grams' => ['nullable', 'integer', 'min:0', 'max:1000000'], 'category_id' => ['nullable', 'string', 'exists:categories,id'],
             'status' => [$required, 'in:draft,published'], 'featured' => ['sometimes', 'boolean'], 'is_digital' => ['sometimes', 'boolean'],
             'digital_file_url' => ['nullable', 'string'], 'variants' => ['sometimes', 'array'], 'variants.*.label' => ['required', 'string', 'max:120'],
             'variants.*.price' => ['required', 'integer', 'min:0'], 'variants.*.stock' => ['required', 'integer', 'min:0'],
+            'variants.*.weight_grams' => ['nullable', 'integer', 'min:0', 'max:1000000'],
         ]);
         if (!empty($data['category_id']) && !\App\Models\Category::whereKey($data['category_id'])->where('scope', 'product')->exists()) abort(422, 'Kategori tidak sesuai jenis produk.');
         if (!empty($data['digital_file_url']) && !FileSecurity::isPathWithin($data['digital_file_url'], 'digital')) abort(422, 'Path file digital tidak valid.');

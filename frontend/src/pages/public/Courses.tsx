@@ -861,6 +861,9 @@ export function CheckoutPage() {
               {order.discountAmount > 0 && (
                 <p className="flex justify-between font-semibold text-ok-500"><span className="flex items-center gap-1.5"><Icon name="tag" size={12} />Voucher {order.voucherCode}</span><span className="font-mono">−{fmtMoney(order.discountAmount)}</span></p>
               )}
+              {order.shippingCost > 0 && (
+                <p className="flex justify-between text-base-500"><span>Ongkir{order.shippingCourierName ? ` · ${order.shippingCourierName}${order.shippingService ? ` ${order.shippingService}` : ''}` : ''}{order.shippingEtd ? ` · ${order.shippingEtd}` : ''}</span><span className="font-mono">{fmtMoney(order.shippingCost)}</span></p>
+              )}
               <p className="flex justify-between border-t border-base-200 dark:border-base-700 pt-2 font-display text-base font-bold text-base-900 dark:text-base-50"><span>Total</span><span>{fmtMoney(order.total)}</span></p>
             </div>
             {order.type === 'shop' && (
@@ -869,6 +872,18 @@ export function CheckoutPage() {
                   <p className="label !mb-1">Kirim ke</p>
                   <p className="text-sm font-bold text-base-800 dark:text-base-100">{order.shippingName} · {order.shippingPhone}</p>
                   <p className="text-xs leading-5 text-base-500">{order.shippingAddress}</p>
+                  {(order.shippingCityName || order.shippingProvinceName) && (
+                    <p className="text-xs leading-5 text-base-500">
+                      {[order.shippingSubdistrictName, order.shippingDistrictName, order.shippingCityName, order.shippingProvinceName].filter(Boolean).join(', ')}
+                      {order.shippingPostalCode ? ` ${order.shippingPostalCode}` : ''}
+                    </p>
+                  )}
+                  {(order.shippingCourierName || order.shippingCost > 0) && (
+                    <p className="mt-1.5 text-xs font-bold text-base-700 dark:text-base-200">
+                      {order.shippingCourierName}{order.shippingService ? ` · ${order.shippingService}` : ''} · {fmtMoney(order.shippingCost)}
+                      {order.shippingEtd ? ` · Estimasi ${order.shippingEtd}` : ''}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <p className="mt-4 flex items-start gap-2 rounded-lg bg-brand-500/[0.07] border border-brand-500/25 p-3 text-[11px] leading-4 text-brand-700 dark:text-brand-300">

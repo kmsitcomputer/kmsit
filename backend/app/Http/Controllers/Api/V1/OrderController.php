@@ -123,6 +123,15 @@ class OrderController extends Controller
             'shipping.name' => ['nullable', 'string', 'max:120'],
             'shipping.address' => ['nullable', 'string', 'max:2000'],
             'shipping.phone' => ['nullable', 'string', 'max:30'],
+            'shipping.note' => ['nullable', 'string', 'max:500'],
+            'shipping.postal_code' => ['nullable', 'string', 'max:10'],
+            'shipping.province_id' => ['nullable'],
+            'shipping.city_id' => ['nullable'],
+            'shipping.district_id' => ['nullable'],
+            'shipping.subdistrict_id' => ['nullable'],
+            'shipping.courier' => ['nullable', 'string', 'max:30'],
+            'shipping.service' => ['nullable', 'string', 'max:60'],
+            'shipping_cost' => ['nullable', 'integer', 'min:0'],
         ]);
 
         if (!empty($data['voucher_code'])) {
@@ -150,6 +159,38 @@ class OrderController extends Controller
                 abort(422, 'Alamat pengiriman wajib diisi untuk produk fisik.');
             }
 
+            // Physical shipping is mandatory: destination + courier/service are
+            // revalidated against the provider and the authoritative cost is
+            // taken. The frontend-submitted cost is never trusted. Digital-only
+            // carts skip this entirely (shipping_cost = 0, no provider contact).
+            $shippingCost = 0;
+            $shippingWeight = null;
+            $shippingOption = null;
+            $destination = null;
+            $ship = $data['shipping'] ?? [];
+            if ($needsShipping) {
+                foreach (['province_id' => 'Provinsi', 'city_id' => 'Kabupaten/kota', 'district_id' => 'Kecamatan', 'subdistrict_id' => 'Kelurahan/desa'] as $key => $label) {
+                    if (empty($ship[$key])) abort(422, "{$label} wajib dipilih untuk pengiriman.");
+                }
+                if (empty($ship['courier']) || empty($ship['service'])) abort(422, 'Kurir dan layanan pengiriman wajib dipilih.');
+                // Validation/provider failures must surface as safe retryable
+                // 422/502 responses, never as 500s from inside the transaction.
+                try {
+                    $revalidated = app(\App\Services\ShippingService::class)->revalidate(
+                        \App\Services\ShippingService::cartLines($items),
+                        $ship['province_id'], $ship['city_id'], $ship['district_id'], $ship['subdistrict_id'],
+                        $ship['courier'], $ship['service']);
+                } catch (\InvalidArgumentException $e) {
+                    abort(422, $e->getMessage());
+                } catch (\RuntimeException $e) {
+                    abort(502, $e->getMessage());
+                }
+                $shippingCost = $revalidated['option']['cost'];
+                $shippingWeight = $revalidated['weight_grams'];
+                $shippingOption = $revalidated['option'];
+                $destination = $revalidated['destination'];
+            }
+
             $discount = 0;
             $voucher = null;
             if (!empty($data['voucher_code'])) {
@@ -164,7 +205,7 @@ class OrderController extends Controller
             app(StockReservation::class)->reserveCart($lines);
 
             $ttl = max(30, (int) config('commerce.pending_order_ttl_minutes', 30));
-            $order = Order::create(['id' => Str::lower(Str::random(12)), 'user_id' => $request->user()->id, 'type' => 'shop', 'status' => 'pending', 'subtotal' => $subtotal, 'discount_amount' => $discount, 'voucher_code' => $voucher?->code, 'total' => $subtotal - $discount, 'currency' => 'IDR', 'needs_shipping' => $needsShipping, 'shipping_name' => $data['shipping']['name'] ?? null, 'shipping_address' => $data['shipping']['address'] ?? null, 'shipping_phone' => $data['shipping']['phone'] ?? null, 'expires_at' => now()->addMinutes($ttl)]);
+            $order = Order::create(['id' => Str::lower(Str::random(12)), 'user_id' => $request->user()->id, 'type' => 'shop', 'status' => 'pending', 'subtotal' => $subtotal, 'discount_amount' => $discount, 'shipping_cost' => $shippingCost, 'voucher_code' => $voucher?->code, 'total' => $subtotal + $shippingCost - $discount, 'currency' => 'IDR', 'needs_shipping' => $needsShipping, 'shipping_name' => $data['shipping']['name'] ?? null, 'shipping_address' => $data['shipping']['address'] ?? null, 'shipping_phone' => $data['shipping']['phone'] ?? null, 'shipping_weight_grams' => $shippingWeight, 'shipping_courier' => $shippingOption['courier'] ?? null, 'shipping_courier_name' => $shippingOption['courier_name'] ?? null, 'shipping_service' => $shippingOption['service'] ?? null, 'shipping_service_name' => $shippingOption['service_name'] ?? $shippingOption['description'] ?? null, 'shipping_etd' => $shippingOption['etd'] ?? null, 'shipping_province_id' => $destination['province_id'] ?? null, 'shipping_province_name' => $destination['province_name'] ?? null, 'shipping_city_id' => $destination['city_id'] ?? null, 'shipping_city_name' => $destination['city_name'] ?? null, 'shipping_district_id' => $destination['district_id'] ?? null, 'shipping_district_name' => $destination['district_name'] ?? null, 'shipping_subdistrict_id' => $destination['subdistrict_id'] ?? null, 'shipping_subdistrict_name' => $destination['subdistrict_name'] ?? null, 'shipping_postal_code' => $data['shipping']['postal_code'] ?? $destination['postal_code'] ?? null, 'shipping_note' => $data['shipping']['note'] ?? null, 'expires_at' => now()->addMinutes($ttl)]);
             $order->forceFill(['stock_reservation_status' => 'reserved'])->save();
             // used_count includes both active reservations and permanent usage.
             if ($voucher) {

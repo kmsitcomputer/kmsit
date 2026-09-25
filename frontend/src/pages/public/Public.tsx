@@ -16,6 +16,7 @@ import { api, type ApiCart, type CourseWithMeta } from '../../lib/api';
 import { Icon, iconTone, iconToneBg, type IconName } from '../../components/icons';
 import { Avatar, Badge, EmptyState, Reveal, RichHTML, SafeImg, Select, YouTube } from '../../components/ui';
 import { PublicShell } from '../../components/Shell';
+import { EMPTY_SHIPPING, ShippingForm, type ShippingFormValue } from '../../components/ShippingForm';
 
 /* ================= course card ================= */
 
@@ -828,6 +829,7 @@ export function ShopPage() {
   const [appliedVoucher, setAppliedVoucher] = useState<{ code: string; discount: number } | null>(null);
   const [voucherErr, setVoucherErr] = useState('');
   const [ship, setShip] = useState({ name: user?.name ?? '', address: '', phone: user?.phone ?? '' });
+  const [shipFull, setShipFull] = useState<ShippingFormValue>(EMPTY_SHIPPING);
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState(1);
   const [cartFromApi, setCartFromApi] = useState<ApiCart>({ items: [], subtotal: 0, count: 0, hasPhysical: false, hasDigital: false });
@@ -858,7 +860,14 @@ export function ShopPage() {
   const checkout = () => {
     if (!user) { nav('/login?next=/shop'); return; }
     setBusy(true);
-    api.createShopOrder({ voucher_code: appliedVoucher?.code ?? '', shipping: cart.hasPhysical ? ship : undefined }).then((response) => {
+    const shipping = cart.hasPhysical ? {
+      name: shipFull.name || ship.name, address: shipFull.address || ship.address, phone: shipFull.phone || ship.phone,
+      note: shipFull.note || undefined, postal_code: shipFull.postal_code || undefined,
+      province_id: shipFull.province_id || undefined, city_id: shipFull.city_id || undefined,
+      district_id: shipFull.district_id || undefined, subdistrict_id: shipFull.subdistrict_id || undefined,
+      courier: shipFull.courier || undefined, service: shipFull.service || undefined,
+    } : undefined;
+    api.createShopOrder({ voucher_code: appliedVoucher?.code ?? '', shipping }).then((response) => {
       const order = (response as { order: { id: string } }).order;
       setCartOpen(false); setAppliedVoucher(null); setVoucherCode(''); window.dispatchEvent(new Event(CART_CHANGED_EVENT)); nav(`/checkout/${order.id}`);
     }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal checkout.')).finally(() => setBusy(false));
@@ -999,9 +1008,9 @@ export function ShopPage() {
                   {cart.hasPhysical && (
                     <div className="mt-4 rounded-xl border border-base-200 dark:border-base-800 p-3.5 space-y-2.5">
                       <p className="label !mb-0"><Icon name="map-pin" size={11} className="inline mr-1 -mt-0.5" />Alamat Pengiriman (produk fisik)</p>
-                      <input value={ship.name} onChange={(e) => setShip({ ...ship, name: e.target.value })} placeholder="Nama penerima" className="input py-2 text-xs" />
-                      <input value={ship.phone} onChange={(e) => setShip({ ...ship, phone: e.target.value })} placeholder="No. HP" className="input py-2 text-xs font-mono" />
-                      <textarea value={ship.address} onChange={(e) => setShip({ ...ship, address: e.target.value })} placeholder="Alamat lengkap…" rows={2} className="textarea py-2 text-xs" />
+                      <ShippingForm compact value={{ ...shipFull, name: shipFull.name || ship.name, address: shipFull.address || ship.address, phone: shipFull.phone || ship.phone }}
+                        onChange={(v) => { setShipFull(v); setShip({ name: v.name, address: v.address, phone: v.phone }); }}
+                        cartSignature={cart.items.filter((l) => !l.product.isDigital).map((l) => `${l.product.id}:${l.variant?.id ?? ''}:${l.item.qty}`).sort().join('|')} />
                     </div>
                   )}
                   {cart.hasDigital && !cart.hasPhysical && (

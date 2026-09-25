@@ -45,7 +45,7 @@ export function SettingsGeneral() {
     'social_facebook','social_instagram','social_youtube','social_tiktok',
     'seo_title','seo_description',
     'allow_registration','maintenance_mode',
-    'platform_fee_percent','currency',
+    'platform_fee_percent','currency','shipping_origin_subdistrict_id','shipping_couriers',
   ] as const;
 
   if (!user) return null;
@@ -131,6 +131,12 @@ export function SettingsGeneral() {
                 <Field label="Fee Platform (%)" hint="Potongan per penjualan kelas berbayar."><TextInput type="number" min={0} max={100} value={f.platform_fee_percent ?? '15'} onChange={(e) => set('platform_fee_percent', e.target.value)} /></Field>
                 <Field label="Mata Uang"><Select value={f.currency ?? 'IDR'} onChange={(e) => set('currency', e.target.value)}><option value="IDR">IDR</option><option value="USD">USD</option></Select></Field>
               </div>
+            </div>
+          </Section>
+          <Section title="Pengiriman (RajaOngkir)" delay={140}>
+            <div className="grid gap-4">
+              <Field label="Origin Toko (ID Kelurahan/Desa)" hint="ID sub-district dari API wilayah RajaOngkir — lokasi pengirim paket."><TextInput value={f.shipping_origin_subdistrict_id ?? ''} onChange={(e) => set('shipping_origin_subdistrict_id', e.target.value)} placeholder="cth: 1111" className="font-mono text-xs" /></Field>
+              <Field label="Kurir Aktif" hint="Pisahkan dengan titik dua, cth: jne:jnt:sicepat. Hanya kurir ini yang tampil di checkout."><TextInput value={f.shipping_couriers ?? ''} onChange={(e) => set('shipping_couriers', e.target.value)} placeholder="jne:jnt:sicepat" className="font-mono text-xs" /></Field>
             </div>
           </Section>
         </div>

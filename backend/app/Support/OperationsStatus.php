@@ -74,7 +74,9 @@ class OperationsStatus
             $rows[] = ['key' => $key, 'kind' => 'payment', 'status' => $ok ? 'active' : 'not_configured', 'selected' => $active === $key, 'mode' => $active === $key ? $mode : null];
         }
         $rows[] = ['key' => 'video_embed', 'kind' => 'content', 'status' => 'active', 'selected' => false, 'mode' => null];
-        foreach (['zoom', 'google_meet', 'youtube_channel', 'rajaongkir', 'openroute'] as $key) {
+        $shippingReady = (bool) (config('shipping.api_key') && config('shipping.origin_subdistrict_id'));
+        $rows[] = ['key' => 'rajaongkir', 'kind' => 'shipping', 'status' => $shippingReady ? 'active' : 'not_configured', 'selected' => false, 'mode' => null];
+        foreach (['zoom', 'google_meet', 'youtube_channel', 'openroute'] as $key) {
             $rows[] = ['key' => $key, 'kind' => 'planned', 'status' => 'not_active', 'selected' => false, 'mode' => null];
         }
         return $rows;

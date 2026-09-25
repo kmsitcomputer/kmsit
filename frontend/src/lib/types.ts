@@ -116,9 +116,29 @@ export type OrderStatus = 'pending' | 'paid' | 'failed' | 'expired';
 export interface OrderItem { kind: 'course' | 'product'; refId: ID; title: string; price: number; qty: number; instructorId: ID | null; instructorName?: string | null; thumbnail?: string | null; variantId?: string | null; variantLabel?: string | null; isDigital?: boolean; }
 export interface Order extends Row {
   userId: ID; type: 'course' | 'shop'; status: OrderStatus;
-  subtotal: number; discountAmount: number; voucherCode: string | null; gatewayFee: number; total: number; currency: string;
+  subtotal: number; discountAmount: number; shippingCost: number; voucherCode: string | null; gatewayFee: number; total: number; currency: string;
   items: OrderItem[]; paidAt: number | null;
   needsShipping: boolean; shippingName?: string; shippingAddress?: string; shippingPhone?: string;
+  shippingWeightGrams?: number | null;
+  shippingCourier?: string | null; shippingCourierName?: string | null;
+  shippingService?: string | null; shippingServiceName?: string | null; shippingEtd?: string | null;
+  shippingProvinceId?: string | null; shippingProvinceName?: string | null;
+  shippingCityId?: string | null; shippingCityName?: string | null;
+  shippingDistrictId?: string | null; shippingDistrictName?: string | null;
+  shippingSubdistrictId?: string | null; shippingSubdistrictName?: string | null;
+  shippingPostalCode?: string | null; shippingNote?: string | null;
+}
+
+export interface RegionRef { id: string; name: string; zip_code?: string | null; }
+export interface ShippingOption {
+  courier: string; courier_name: string; service: string; service_name: string;
+  description?: string | null; cost: number; etd?: string | null;
+}
+export interface ShippingQuote {
+  weight_grams: number;
+  destination?: { province_name: string; city_name: string; district_name: string; subdistrict_name: string; postal_code?: string | null };
+  services: ShippingOption[];
+  message?: string;
 }
 
 export type GatewayKey = 'tripay' | 'xendit' | 'stripe';
@@ -141,10 +161,10 @@ export interface Withdrawal extends Row {
   notes: string; status: WithdrawalStatus; processedBy: ID | null; processedAt: number | null; adminNote: string;
 }
 
-export interface ProductVariant { id: string; label: string; price: number; stock: number; }
+export interface ProductVariant { id: string; label: string; price: number; stock: number; weightGrams?: number | null; }
 export interface Product extends Row {
   name: string; slug: string; description: string; thumbnail?: string | null;
-  price: number; discountPrice: number; stock: number; categoryId: ID | null;
+  price: number; discountPrice: number; stock: number; weightGrams?: number | null; categoryId: ID | null;
   status: ContentStatus; featured: boolean;
   isDigital: boolean; digitalFileUrl?: string | null; variants: ProductVariant[] | null;
 }

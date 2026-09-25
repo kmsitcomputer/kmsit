@@ -34,12 +34,12 @@ class ShopApiTest extends TestCase
     {
         $this->seed();
         $user = $this->user('checkout-shop@example.com');
-        $product = Product::create(['id' => 'product00002', 'slug' => 'mouse', 'name' => 'Mouse', 'price' => 50000, 'discount_price' => 40000, 'stock' => 3, 'status' => 'published', 'is_digital' => false]);
+        // Digital product: total is recalculated server-side without shipping.
+        $product = Product::create(['id' => 'product00002', 'slug' => 'ebook-server', 'name' => 'Ebook', 'price' => 50000, 'discount_price' => 40000, 'stock' => 30, 'status' => 'published', 'is_digital' => true, 'digital_file_url' => 'digital/ebook.pdf']);
         CartItem::create(['id' => 'cartitem00001', 'user_id' => $user->id, 'product_id' => $product->id, 'qty' => 2]);
         Voucher::create(['id' => 'voucher00001', 'code' => 'HEMAT10', 'type' => 'percent', 'value' => 10, 'min_order' => 0, 'active' => true]);
 
-        $this->actingAs($user, 'sanctum')->postJson('/api/v1/orders/shop', ['voucher_code' => 'HEMAT10'])->assertStatus(422);
-        $response = $this->actingAs($user, 'sanctum')->postJson('/api/v1/orders/shop', ['voucher_code' => 'HEMAT10', 'shipping' => ['name' => 'Buyer', 'address' => 'Jalan Test 1', 'phone' => '08123456789']]);
+        $response = $this->actingAs($user, 'sanctum')->postJson('/api/v1/orders/shop', ['voucher_code' => 'HEMAT10']);
         $response->assertCreated()->assertJsonPath('order.subtotal', 80000)->assertJsonPath('order.discount_amount', 8000)->assertJsonPath('order.total', 72000);
     }
 

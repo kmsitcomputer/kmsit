@@ -38,6 +38,7 @@ class SettingsController extends Controller
         'seo_title', 'seo_description', 'about_hero_title', 'about_hero_subtitle', 'about_description', 'about_vision',
         'about_mission', 'about_history', 'about_video', 'about_team', 'about_gallery', 'theme_website', 'theme_dashboard',
         'platform_fee_percent',
+        'shipping_origin_subdistrict_id', 'shipping_couriers',
         'zoom_enabled', 'zoom_account_id', 'zoom_client_id', 'gmeet_enabled', 'gmeet_default_url',
         'youtube_enabled', 'youtube_channel_url',
     ];

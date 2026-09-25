@@ -61,6 +61,7 @@ function OrderDetail({ order, onClose }: { order: OrderWithBuyer; onClose: () =>
       <div className="mt-3 flex flex-wrap justify-end gap-x-6 gap-y-1 text-sm">
         <span className="text-base-500">Subtotal <b className="font-mono text-base-800 dark:text-base-100">{fmtMoney(order.subtotal)}</b></span>
         {order.discountAmount > 0 && <span className="text-ok-500">Voucher {order.voucherCode} <b className="font-mono">−{fmtMoney(order.discountAmount)}</b></span>}
+        {order.shippingCost > 0 && <span className="text-base-500">Ongkir <b className="font-mono text-base-800 dark:text-base-100">{fmtMoney(order.shippingCost)}</b></span>}
         <span className="text-base-500">Total <b className="font-display text-base-900 dark:text-base-50">{fmtMoney(order.total)}</b></span>
       </div>
       {order.type === 'shop' && (
@@ -69,6 +70,19 @@ function OrderDetail({ order, onClose }: { order: OrderWithBuyer; onClose: () =>
             <p className="label !mb-1">Pengiriman (produk fisik)</p>
             <p className="text-sm font-bold text-base-800 dark:text-base-100">{order.shippingName} · {order.shippingPhone}</p>
             <p className="text-xs leading-5 text-base-500">{order.shippingAddress}</p>
+            {(order.shippingCityName || order.shippingProvinceName) && (
+              <p className="text-xs leading-5 text-base-500">
+                {[order.shippingSubdistrictName, order.shippingDistrictName, order.shippingCityName, order.shippingProvinceName].filter(Boolean).join(', ')}
+                {order.shippingPostalCode ? ` ${order.shippingPostalCode}` : ''}
+              </p>
+            )}
+            {(order.shippingCourierName || order.shippingCost > 0) && (
+              <p className="mt-1.5 text-xs font-bold text-base-700 dark:text-base-200">
+                {order.shippingCourierName}{order.shippingService ? ` · ${order.shippingService}` : ''} · {fmtMoney(order.shippingCost)}
+                {order.shippingEtd ? ` · Estimasi ${order.shippingEtd}` : ''}
+                {order.shippingWeightGrams ? ` · ${(order.shippingWeightGrams / 1000).toFixed(1)} kg` : ''}
+              </p>
+            )}
           </div>
         ) : (
           <p className="mt-4 flex items-center gap-2 rounded-lg bg-brand-500/[0.07] border border-brand-500/25 px-3.5 py-2.5 text-xs font-semibold text-brand-700 dark:text-brand-300">

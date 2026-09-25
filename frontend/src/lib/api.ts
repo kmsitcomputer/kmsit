@@ -59,7 +59,7 @@ export type OrderWithBuyer = Order & { buyerName?: string; buyerEmail?: string }
 function toOrder(payload: Record<string, any>): OrderWithBuyer {
   return {
     id: String(payload.id), userId: String(payload.user_id), type: payload.type, status: payload.status,
-    subtotal: Number(payload.subtotal), discountAmount: Number(payload.discount_amount), voucherCode: payload.voucher_code,
+    subtotal: Number(payload.subtotal), discountAmount: Number(payload.discount_amount), shippingCost: Number(payload.shipping_cost ?? 0), voucherCode: payload.voucher_code,
     gatewayFee: Number(payload.gateway_fee), total: Number(payload.total), currency: String(payload.currency),
     items: (payload.items || []).map((item: Record<string, any>) => ({
       kind: item.kind, refId: String(item.ref_id), title: item.title, price: Number(item.price), qty: Number(item.qty),
@@ -68,6 +68,14 @@ function toOrder(payload: Record<string, any>): OrderWithBuyer {
     })),
     paidAt: payload.paid_at ? Date.parse(payload.paid_at) : null, needsShipping: Boolean(payload.needs_shipping),
     shippingName: payload.shipping_name, shippingAddress: payload.shipping_address, shippingPhone: payload.shipping_phone,
+    shippingWeightGrams: payload.shipping_weight_grams ?? null,
+    shippingCourier: payload.shipping_courier ?? null, shippingCourierName: payload.shipping_courier_name ?? null,
+    shippingService: payload.shipping_service ?? null, shippingServiceName: payload.shipping_service_name ?? null, shippingEtd: payload.shipping_etd ?? null,
+    shippingProvinceId: payload.shipping_province_id ?? null, shippingProvinceName: payload.shipping_province_name ?? null,
+    shippingCityId: payload.shipping_city_id ?? null, shippingCityName: payload.shipping_city_name ?? null,
+    shippingDistrictId: payload.shipping_district_id ?? null, shippingDistrictName: payload.shipping_district_name ?? null,
+    shippingSubdistrictId: payload.shipping_subdistrict_id ?? null, shippingSubdistrictName: payload.shipping_subdistrict_name ?? null,
+    shippingPostalCode: payload.shipping_postal_code ?? null, shippingNote: payload.shipping_note ?? null,
     createdAt: payload.created_at ? Date.parse(payload.created_at) : 0, updatedAt: payload.updated_at ? Date.parse(payload.updated_at) : 0,
     buyerName: payload.user?.name, buyerEmail: payload.user?.email,
   };
@@ -79,12 +87,21 @@ function toPayment(payload: Record<string, any>): PaymentWithBuyer {
   return { id: String(payload.id), orderId: String(payload.order_id), gateway: payload.gateway, mode: payload.mode, method: payload.method, reference: payload.reference, merchantRef: payload.merchant_ref, amount: Number(payload.amount), fee: Number(payload.fee), status: payload.status, signature: payload.signature, events: Array.isArray(payload.events) ? payload.events : [], createdAt: payload.created_at ? Date.parse(payload.created_at) : 0, updatedAt: payload.updated_at ? Date.parse(payload.updated_at) : 0, buyerName: payload.order?.user?.name };
 }
 
+/** Provider region IDs may arrive as numbers; normalize to strings at the API boundary. */
+function toRegions(payload: unknown): import('./types').RegionRef[] {
+  if (!Array.isArray(payload)) return [];
+  return payload.map((row: any): import('./types').RegionRef => ({
+    id: String(row?.id ?? ''), name: String(row?.name ?? ''),
+    zip_code: row?.zip_code != null ? String(row.zip_code) : null,
+  })).filter((row) => row.id !== '');
+}
+
 function toProduct(payload: Record<string, any>): Product {
   return {
     id: String(payload.id), name: String(payload.name ?? ''), slug: String(payload.slug ?? ''), description: payload.description ?? '', thumbnail: payload.thumbnail ?? null,
-    price: Number(payload.price ?? 0), discountPrice: Number(payload.discount_price ?? 0), stock: Number(payload.stock ?? 0), categoryId: payload.category_id ?? null,
+    price: Number(payload.price ?? 0), discountPrice: Number(payload.discount_price ?? 0), stock: Number(payload.stock ?? 0), weightGrams: payload.weight_grams ?? null, categoryId: payload.category_id ?? null,
     status: payload.status, featured: Boolean(payload.featured), isDigital: Boolean(payload.is_digital), digitalFileUrl: payload.digital_file_url ?? null,
-    variants: Array.isArray(payload.variants) ? payload.variants.map((variant: Record<string, any>): ProductVariant => ({ id: String(variant.id), label: variant.label, price: Number(variant.price), stock: Number(variant.stock) })) : null,
+    variants: Array.isArray(payload.variants) ? payload.variants.map((variant: Record<string, any>): ProductVariant => ({ id: String(variant.id), label: variant.label, price: Number(variant.price), stock: Number(variant.stock), weightGrams: variant.weight_grams ?? null })) : null,
     createdAt: payload.created_at ? Date.parse(payload.created_at) : 0, updatedAt: payload.updated_at ? Date.parse(payload.updated_at) : 0,
   };
 }
@@ -365,8 +382,23 @@ export const api = {
   async createCourseOrder(courseSlug: string): Promise<unknown> {
     return request('/orders/course', { method: 'POST', body: JSON.stringify({ course_slug: courseSlug }) });
   },
-  async createShopOrder(payload: { voucher_code?: string; shipping?: { name: string; address: string; phone: string } }): Promise<unknown> {
+  async createShopOrder(payload: { voucher_code?: string; shipping?: { name: string; address: string; phone: string; note?: string; postal_code?: string; province_id?: string; city_id?: string; district_id?: string; subdistrict_id?: string; courier?: string; service?: string } }): Promise<unknown> {
     return request('/orders/shop', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  async shippingProvinces(): Promise<import('./types').RegionRef[]> {
+    return toRegions((await request<{ provinces: unknown }>('/shipping/provinces')).provinces);
+  },
+  async shippingCities(provinceId: string): Promise<import('./types').RegionRef[]> {
+    return toRegions((await request<{ cities: unknown }>(`/shipping/cities/${encodeURIComponent(provinceId)}`)).cities);
+  },
+  async shippingDistricts(cityId: string): Promise<import('./types').RegionRef[]> {
+    return toRegions((await request<{ districts: unknown }>(`/shipping/districts/${encodeURIComponent(cityId)}`)).districts);
+  },
+  async shippingSubdistricts(districtId: string): Promise<import('./types').RegionRef[]> {
+    return toRegions((await request<{ subdistricts: unknown }>(`/shipping/subdistricts/${encodeURIComponent(districtId)}`)).subdistricts);
+  },
+  async shippingQuote(payload: { province_id: string; city_id: string; district_id: string; subdistrict_id: string }): Promise<import('./types').ShippingQuote> {
+    return request('/shipping/quote', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The provider is chosen server-side; only the method key is sent. */
   async initiatePayment(orderId: string, method: string): Promise<{ payment: { reference: string }; checkout_url?: string | null }> {

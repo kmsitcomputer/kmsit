@@ -127,6 +127,21 @@ try {
     const apiSource = readFileSync(join(src, 'lib/api.ts'), 'utf8');
     assert.ok(apiSource.includes("'/admin/homepage/blocks'"), 'management listing must use the distinct admin endpoint');
   });
+  check('shipping checkout never trusts frontend price and uses backend regions', () => {
+    const apiSource = readFileSync(join(src, 'lib/api.ts'), 'utf8');
+    assert.ok(apiSource.includes("'/shipping/provinces'"), 'region lookup must go through the backend');
+    assert.ok(apiSource.includes("'/shipping/quote'"), 'quote must go through the backend');
+    assert.ok(!/rajaongkir\.komerce\.id/.test(apiSource), 'provider host must never appear in frontend code');
+    assert.ok(/function toRegions/.test(apiSource), 'region IDs must be normalized at the API boundary');
+    const form = readFileSync(join(src, 'components/ShippingForm.tsx'), 'utf8');
+    assert.ok(/api\.shippingProvinces\(\)/.test(form), 'province list must come from the backend');
+    assert.ok(/courier.*service/.test(form), 'courier/service must come from the backend quote');
+    assert.ok(/String\(s\.id\) === String\(value\.subdistrict_id\)/.test(form), 'postal assist must compare normalized IDs');
+    assert.ok(/cartSignature/.test(form), 'quote must invalidate when the physical cart signature changes');
+    const shop = readFileSync(join(src, 'pages/public/Public.tsx'), 'utf8');
+    assert.ok(!/shipping_cost/.test(shop), 'frontend must never submit a shipping cost');
+    assert.ok(/cartSignature=\{cart\.items/.test(shop), 'shop must pass a physical-cart signature to the shipping form');
+  });
 
   console.log(`\nverify-dashboard: ${passed} checks passed`);
 } finally {
