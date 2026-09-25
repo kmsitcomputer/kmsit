@@ -1,19 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../lib/api';
-import type { RegionRef, ShippingOption, ShippingQuote } from '../lib/types';
+import type { DeliveryMethod, LocalDeliveryConfig, LocalDeliveryQuote, RegionRef, ShippingOption, ShippingQuote } from '../lib/types';
 import { Field, Select, TextArea, TextInput } from './ui';
 import { fmtMoney } from '../lib/format';
+import { MapsPicker } from './MapsPicker';
 
 export interface ShippingFormValue {
   name: string; phone: string;
   province_id: string; city_id: string; district_id: string; subdistrict_id: string;
   postal_code: string; address: string; note: string;
   courier: string; service: string;
+  delivery_method: DeliveryMethod;
+  local_latitude: number | null; local_longitude: number | null;
 }
 
 export const EMPTY_SHIPPING: ShippingFormValue = {
   name: '', phone: '', province_id: '', city_id: '', district_id: '', subdistrict_id: '',
   postal_code: '', address: '', note: '', courier: '', service: '',
+  delivery_method: 'expedition', local_latitude: null, local_longitude: null,
 };
 
 /**
@@ -37,8 +41,18 @@ export function ShippingForm({ value, onChange, compact, cartSignature }: {
   const [quoteBusy, setQuoteBusy] = useState(false);
   const [quoteError, setQuoteError] = useState('');
   const [search, setSearch] = useState({ city: '', district: '', subdistrict: '' });
+  const [localConfig, setLocalConfig] = useState<LocalDeliveryConfig | null>(null);
+  const [localQuote, setLocalQuote] = useState<LocalDeliveryQuote | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
+  const [localError, setLocalError] = useState('');
 
   const set = (patch: Partial<ShippingFormValue>) => onChange({ ...value, ...patch });
+  const isLocal = value.delivery_method === 'local_delivery';
+
+  useEffect(() => {
+    api.localDeliveryConfig().then(setLocalConfig).catch(() => setLocalConfig(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setLoading('provinces');
@@ -114,6 +128,15 @@ export function ShippingForm({ value, onChange, compact, cartSignature }: {
       .finally(() => setQuoteBusy(false));
   };
 
+  const refreshLocalQuote = () => {
+    if (value.local_latitude == null || value.local_longitude == null) return;
+    setLocalBusy(true); setLocalError('');
+    api.localDeliveryQuote({ latitude: value.local_latitude, longitude: value.local_longitude })
+      .then(setLocalQuote)
+      .catch((e) => { setLocalQuote(null); setLocalError(e instanceof Error ? e.message : 'Gagal menghitung ongkir. Coba lagi.'); })
+      .finally(() => setLocalBusy(false));
+  };
+
   const selected: ShippingOption | null = quote?.services.find((s) => s.courier === value.courier && s.service === value.service) ?? null;
 
   const opt = (v: string, label: string) => <option key={v || label} value={v}>{label}</option>;
@@ -129,6 +152,39 @@ export function ShippingForm({ value, onChange, compact, cartSignature }: {
           <TextInput value={value.phone} onChange={(e) => set({ phone: e.target.value })} placeholder="08…" className={compact ? 'py-2 text-xs font-mono' : 'font-mono'} />
         </Field>
       </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={() => set({ delivery_method: 'expedition', local_latitude: null, local_longitude: null })}
+          className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-all cursor-pointer ${!isLocal ? 'bg-base-900 dark:bg-base-50 text-base-50 dark:text-base-950' : 'bg-base-100 dark:bg-base-850 text-base-500'}`}>
+          Ekspedisi (RajaOngkir)
+        </button>
+        <button type="button" disabled={!localConfig?.enabled} title={localConfig?.enabled ? 'Antar langsung dari toko' : 'Local Delivery belum tersedia'}
+          onClick={() => set({ delivery_method: 'local_delivery', courier: '', service: '' })}
+          className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-all ${isLocal ? 'bg-base-900 dark:bg-base-50 text-base-50 dark:text-base-950' : 'bg-base-100 dark:bg-base-850 text-base-500'} disabled:opacity-40 disabled:cursor-not-allowed`}>
+          Local Delivery{localConfig?.store_name ? ` · ${localConfig.store_name}` : ''}
+        </button>
+      </div>
+      {isLocal ? (
+        <div className="space-y-2.5">
+          <MapsPicker compact latitude={value.local_latitude} longitude={value.local_longitude}
+            onChange={(lat, lng) => { set({ local_latitude: lat, local_longitude: lng }); setLocalQuote(null); setLocalError(''); }} />
+          <div className="rounded-xl border border-base-200 dark:border-base-800 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="label !mb-0">Ongkir Local Delivery</p>
+              <button className="btn-outline btn-sm" disabled={value.local_latitude == null || value.local_longitude == null || localBusy} onClick={refreshLocalQuote}>
+                {localBusy ? 'Menghitung…' : localQuote ? 'Hitung ulang' : 'Cek ongkir'}
+              </button>
+            </div>
+            {localError && <p className="mt-2 text-[11px] font-semibold text-danger-500">{localError}</p>}
+            {localQuote && (
+              <div className="mt-2 rounded-lg bg-brand-500/10 border border-brand-500/30 px-3 py-2 text-xs font-bold text-brand-700 dark:text-brand-300">
+                Jarak rute {localQuote.actual_km.toFixed(2)} km · {fmtMoney(localQuote.shipping_cost)}
+                <span className="block mt-0.5 font-normal text-[11px] opacity-80">Dihitung server dari rute aktual — diverifikasi ulang saat checkout.</span>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+      <>
       <Field label="Provinsi" required>
         <Select value={value.province_id} disabled={loading === 'provinces'} className={compact ? 'py-2 text-xs' : ''}
           onChange={(e) => set({ province_id: e.target.value, city_id: '', district_id: '', subdistrict_id: '', postal_code: '', courier: '', service: '' })}>
@@ -203,6 +259,8 @@ export function ShippingForm({ value, onChange, compact, cartSignature }: {
         <p className="rounded-lg bg-brand-500/10 border border-brand-500/30 px-3 py-2 text-xs font-bold text-brand-700 dark:text-brand-300">
           {selected.courier_name} {selected.service} · {fmtMoney(selected.cost)}{selected.etd ? ` · ${selected.etd}` : ''}
         </p>
+      )}
+      </>
       )}
     </div>
   );

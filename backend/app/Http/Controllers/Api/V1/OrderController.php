@@ -131,6 +131,9 @@ class OrderController extends Controller
             'shipping.subdistrict_id' => ['nullable'],
             'shipping.courier' => ['nullable', 'string', 'max:30'],
             'shipping.service' => ['nullable', 'string', 'max:60'],
+            'shipping.delivery_method' => ['nullable', 'string', 'max:20'],
+            'shipping.local_latitude' => ['nullable', 'numeric'],
+            'shipping.local_longitude' => ['nullable', 'numeric'],
             'shipping_cost' => ['nullable', 'integer', 'min:0'],
         ]);
 
@@ -159,16 +162,42 @@ class OrderController extends Controller
                 abort(422, 'Alamat pengiriman wajib diisi untuk produk fisik.');
             }
 
-            // Physical shipping is mandatory: destination + courier/service are
-            // revalidated against the provider and the authoritative cost is
-            // taken. The frontend-submitted cost is never trusted. Digital-only
-            // carts skip this entirely (shipping_cost = 0, no provider contact).
+            // Physical shipping is mandatory. Two independent methods:
+            // - expedition: RajaOngkir destination + courier/service, revalidated.
+            // - local_delivery: Google Maps coordinates, OpenRoute route,
+            //   backend eligibility + tariff, revalidated. Client-supplied
+            //   distance/cost/eligibility is never trusted. Digital-only carts
+            //   skip this entirely (shipping_cost = 0, no provider contact).
             $shippingCost = 0;
             $shippingWeight = null;
             $shippingOption = null;
             $destination = null;
+            $deliveryMethod = null;
+            $deliveryLat = null;
+            $deliveryLng = null;
+            $deliveryDistance = null;
             $ship = $data['shipping'] ?? [];
             if ($needsShipping) {
+                $deliveryMethod = strtolower(trim((string) ($ship['delivery_method'] ?? 'expedition')));
+                if (!in_array($deliveryMethod, ['expedition', 'local_delivery'], true)) abort(422, 'Metode pengiriman tidak valid.');
+            }
+            if ($needsShipping && $deliveryMethod === 'local_delivery') {
+                $lat = isset($ship['local_latitude']) ? (float) $ship['local_latitude'] : NAN;
+                $lng = isset($ship['local_longitude']) ? (float) $ship['local_longitude'] : NAN;
+                if (!is_finite($lat) || !is_finite($lng)) abort(422, 'Koordinat tujuan Local Delivery tidak valid.');
+                try {
+                    $local = app(\App\Services\LocalDeliveryService::class)->quote($lat, $lng);
+                } catch (\InvalidArgumentException $e) {
+                    abort(422, $e->getMessage());
+                } catch (\RuntimeException $e) {
+                    abort(502, $e->getMessage());
+                }
+                $shippingCost = $local['shipping_cost'];
+                $deliveryLat = $lat;
+                $deliveryLng = $lng;
+                $deliveryDistance = $local['distance_meters'];
+            }
+            if ($needsShipping && $deliveryMethod === 'expedition') {
                 foreach (['province_id' => 'Provinsi', 'city_id' => 'Kabupaten/kota', 'district_id' => 'Kecamatan', 'subdistrict_id' => 'Kelurahan/desa'] as $key => $label) {
                     if (empty($ship[$key])) abort(422, "{$label} wajib dipilih untuk pengiriman.");
                 }
@@ -205,7 +234,7 @@ class OrderController extends Controller
             app(StockReservation::class)->reserveCart($lines);
 
             $ttl = max(30, (int) config('commerce.pending_order_ttl_minutes', 30));
-            $order = Order::create(['id' => Str::lower(Str::random(12)), 'user_id' => $request->user()->id, 'type' => 'shop', 'status' => 'pending', 'subtotal' => $subtotal, 'discount_amount' => $discount, 'shipping_cost' => $shippingCost, 'voucher_code' => $voucher?->code, 'total' => $subtotal + $shippingCost - $discount, 'currency' => 'IDR', 'needs_shipping' => $needsShipping, 'shipping_name' => $data['shipping']['name'] ?? null, 'shipping_address' => $data['shipping']['address'] ?? null, 'shipping_phone' => $data['shipping']['phone'] ?? null, 'shipping_weight_grams' => $shippingWeight, 'shipping_courier' => $shippingOption['courier'] ?? null, 'shipping_courier_name' => $shippingOption['courier_name'] ?? null, 'shipping_service' => $shippingOption['service'] ?? null, 'shipping_service_name' => $shippingOption['service_name'] ?? $shippingOption['description'] ?? null, 'shipping_etd' => $shippingOption['etd'] ?? null, 'shipping_province_id' => $destination['province_id'] ?? null, 'shipping_province_name' => $destination['province_name'] ?? null, 'shipping_city_id' => $destination['city_id'] ?? null, 'shipping_city_name' => $destination['city_name'] ?? null, 'shipping_district_id' => $destination['district_id'] ?? null, 'shipping_district_name' => $destination['district_name'] ?? null, 'shipping_subdistrict_id' => $destination['subdistrict_id'] ?? null, 'shipping_subdistrict_name' => $destination['subdistrict_name'] ?? null, 'shipping_postal_code' => $data['shipping']['postal_code'] ?? $destination['postal_code'] ?? null, 'shipping_note' => $data['shipping']['note'] ?? null, 'expires_at' => now()->addMinutes($ttl)]);
+            $order = Order::create(['id' => Str::lower(Str::random(12)), 'user_id' => $request->user()->id, 'type' => 'shop', 'status' => 'pending', 'subtotal' => $subtotal, 'discount_amount' => $discount, 'shipping_cost' => $shippingCost, 'voucher_code' => $voucher?->code, 'total' => $subtotal + $shippingCost - $discount, 'currency' => 'IDR', 'needs_shipping' => $needsShipping, 'delivery_method' => $deliveryMethod, 'shipping_name' => $data['shipping']['name'] ?? null, 'shipping_address' => $data['shipping']['address'] ?? null, 'shipping_phone' => $data['shipping']['phone'] ?? null, 'shipping_weight_grams' => $shippingWeight, 'shipping_courier' => $deliveryMethod === 'local_delivery' ? 'local' : ($shippingOption['courier'] ?? null), 'shipping_courier_name' => $deliveryMethod === 'local_delivery' ? 'Local Delivery' : ($shippingOption['courier_name'] ?? null), 'shipping_service' => $shippingOption['service'] ?? null, 'shipping_service_name' => $shippingOption['service_name'] ?? $shippingOption['description'] ?? null, 'shipping_etd' => $shippingOption['etd'] ?? null, 'shipping_province_id' => $destination['province_id'] ?? null, 'shipping_province_name' => $destination['province_name'] ?? null, 'shipping_city_id' => $destination['city_id'] ?? null, 'shipping_city_name' => $destination['city_name'] ?? null, 'shipping_district_id' => $destination['district_id'] ?? null, 'shipping_district_name' => $destination['district_name'] ?? null, 'shipping_subdistrict_id' => $destination['subdistrict_id'] ?? null, 'shipping_subdistrict_name' => $destination['subdistrict_name'] ?? null, 'shipping_postal_code' => $data['shipping']['postal_code'] ?? $destination['postal_code'] ?? null, 'shipping_note' => $data['shipping']['note'] ?? null, 'delivery_latitude' => $deliveryLat, 'delivery_longitude' => $deliveryLng, 'delivery_distance_meters' => $deliveryDistance, 'expires_at' => now()->addMinutes($ttl)]);
             $order->forceFill(['stock_reservation_status' => 'reserved'])->save();
             // used_count includes both active reservations and permanent usage.
             if ($voucher) {

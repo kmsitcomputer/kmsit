@@ -382,7 +382,7 @@ export const api = {
   async createCourseOrder(courseSlug: string): Promise<unknown> {
     return request('/orders/course', { method: 'POST', body: JSON.stringify({ course_slug: courseSlug }) });
   },
-  async createShopOrder(payload: { voucher_code?: string; shipping?: { name: string; address: string; phone: string; note?: string; postal_code?: string; province_id?: string; city_id?: string; district_id?: string; subdistrict_id?: string; courier?: string; service?: string } }): Promise<unknown> {
+  async createShopOrder(payload: { voucher_code?: string; shipping?: { name: string; address: string; phone: string; note?: string; postal_code?: string; province_id?: string; city_id?: string; district_id?: string; subdistrict_id?: string; courier?: string; service?: string; delivery_method?: string; local_latitude?: number; local_longitude?: number } }): Promise<unknown> {
     return request('/orders/shop', { method: 'POST', body: JSON.stringify(payload) });
   },
   async shippingProvinces(): Promise<import('./types').RegionRef[]> {
@@ -399,6 +399,12 @@ export const api = {
   },
   async shippingQuote(payload: { province_id: string; city_id: string; district_id: string; subdistrict_id: string }): Promise<import('./types').ShippingQuote> {
     return request('/shipping/quote', { method: 'POST', body: JSON.stringify(payload) });
+  },
+  async localDeliveryConfig(): Promise<import('./types').LocalDeliveryConfig> {
+    return request('/local-delivery/config');
+  },
+  async localDeliveryQuote(payload: { latitude: number; longitude: number }): Promise<import('./types').LocalDeliveryQuote> {
+    return request('/local-delivery/quote', { method: 'POST', body: JSON.stringify(payload) });
   },
   /** The provider is chosen server-side; only the method key is sent. */
   async initiatePayment(orderId: string, method: string): Promise<{ payment: { reference: string }; checkout_url?: string | null }> {

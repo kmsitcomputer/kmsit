@@ -19,7 +19,7 @@ Disusun dari audit kode aktual, bukan dari field settings. Klasifikasi:
 | Google Meet | Configuration-only | settings `gmeet_enabled`, `gmeet_default_url` | Tidak ada kode yang membaca/memakai. Tidak diimplementasi. |
 | YouTube settings (`youtube_enabled`, `youtube_channel_url`) | Placeholder | `SettingsController` writable keys, `Settings.tsx` | Embed YouTube memakai URL per-konten, bukan setting channel ini. |
 | RajaOngkir / shipping rate | Implemented | `app/Contracts/ShippingProvider.php`, `app/Services/RajaOngkirProvider.php`, `app/Services/ShippingService.php`, `config/shipping.php`, `ShippingController`, `OrderController@storeShop` | Shipping Cost V2 backend-only (header `key:`); origin server-controlled (settings/env); quote dinormalisasi; checkout revalidasi dan snapshot ke `orders`. Tanpa Delivery API (pickup/AWB/tracking). |
-| OpenRouteService / routing | Absent | — | Tidak ada kode/config terkait. |
+| OpenRouteService / routing | Implemented | `app/Contracts/RouteProvider.php`, `app/Services/OpenRouteProvider.php`, `app/Services/RouteManager.php`, `app/Services/LocalDeliveryService.php`, `config/route.php`, `LocalDeliveryController`, `OrderController@storeShop` | Directions V2 backend-only (auth header, koordinat [lng,lat]); tarif/eligibilitas Local Delivery runtime dari Dashboard; checkout revalidasi dan snapshot ke `orders`. |
 
 ## Pemilihan provider & mode (server-side)
 

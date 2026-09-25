@@ -142,6 +142,37 @@ try {
     assert.ok(!/shipping_cost/.test(shop), 'frontend must never submit a shipping cost');
     assert.ok(/cartSignature=\{cart\.items/.test(shop), 'shop must pass a physical-cart signature to the shipping form');
   });
+  check('local delivery uses backend route pricing and map picker boundary', () => {
+    const apiSource = readFileSync(join(src, 'lib/api.ts'), 'utf8');
+    assert.ok(apiSource.includes("'/local-delivery/quote'"), 'local quote must go through the backend');
+    assert.ok(apiSource.includes("'/local-delivery/config'"), 'local config must go through the backend');
+    assert.ok(!/api\.openrouteservice\.org/.test(apiSource), 'route provider host must never appear in frontend code');
+    const form = readFileSync(join(src, 'components/ShippingForm.tsx'), 'utf8');
+    assert.ok(/localDeliveryQuote/.test(form), 'shipping form must quote local delivery from the backend');
+    assert.ok(/delivery_method/.test(form), 'shipping form must select a delivery method');
+    // Interactive picker wiring (not a mere lat/lng string match): JS API load,
+    // map click listener, marker create/update, coordinate callback, both wirings.
+    const picker = readFileSync(join(src, 'components/MapsPicker.tsx'), 'utf8');
+    assert.ok(/loadGoogleMaps|maps\.googleapis\.com\/maps\/api\/js/.test(picker), 'picker must integrate the Google Maps JS API');
+    assert.ok(/addListener\('click'/.test(picker), 'picker must wire a map click listener');
+    assert.ok(/AdvancedMarkerElement/.test(picker), 'picker must create/update a modern marker');
+    assert.ok(/onChange\(lat, lng\)|onChangeRef\.current\(/.test(picker), 'picker must emit coordinates via callback');
+    assert.ok(!/['"]kmsit-picker['"]/.test(picker), 'picker must not use the hard-coded legacy map id');
+    assert.ok(/google_maps_map_id/.test(picker) && /DEMO_MAP_ID/.test(picker), 'picker must read the Map ID setting with DEMO_MAP_ID fallback');
+    const loader = readFileSync(join(src, 'lib/googleMaps.ts'), 'utf8');
+    assert.ok(/maps\.googleapis\.com\/maps\/api\/js/.test(loader), 'maps loader must bootstrap the JS API');
+    assert.ok(!/openrouteservice/i.test(loader) && !/distance/i.test(loader), 'maps loader must not compute routes or prices');
+    assert.ok(!/distance.*shipping_cost|shipping_cost.*distance/.test(picker), 'picker must not compute distance or price');
+    const settingsPage = readFileSync(join(src, 'pages/dash/Settings.tsx'), 'utf8');
+    assert.ok(/MapsPicker/.test(settingsPage) && /local_delivery_store_latitude/.test(settingsPage), 'dashboard store picker must wire to existing store coordinate settings');
+    assert.ok(/google_maps_map_id/.test(settingsPage), 'dashboard must expose the Google Maps Map ID field');
+    assert.ok(!/tanpa key tetap pakai embed/.test(settingsPage), 'obsolete embed fallback guidance must be gone');
+    assert.ok(/<option value="driving-car">Driving Car<\/option>/.test(settingsPage)
+      && /<option value="foot-walking">Foot Walking<\/option>/.test(settingsPage), 'routing profile must be an allowlisted select');
+    assert.ok(!/OPENROUTE_API_KEY/.test(settingsPage), 'dashboard must never expose the OpenRoute key');
+    const shop = readFileSync(join(src, 'pages/public/Public.tsx'), 'utf8');
+    assert.ok(/MapsPicker|local_latitude/.test(shop) || /ShippingForm/.test(shop), 'checkout must wire the picker through the shipping form');
+  });
 
   console.log(`\nverify-dashboard: ${passed} checks passed`);
 } finally {

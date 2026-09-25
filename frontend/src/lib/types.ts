@@ -141,6 +141,18 @@ export interface ShippingQuote {
   message?: string;
 }
 
+export type DeliveryMethod = 'expedition' | 'local_delivery';
+export interface LocalDeliveryConfig {
+  enabled: boolean; store_name?: string | null;
+  minimum_distance_km: number; minimum_fee: number; rate_per_km: number; maximum_distance_km: number;
+  message?: string;
+}
+export interface LocalDeliveryQuote {
+  eligible: boolean; distance_meters: number; duration_seconds?: number | null;
+  actual_km: number; shipping_cost: number;
+  store?: { name?: string | null; latitude: number; longitude: number };
+}
+
 export type GatewayKey = 'tripay' | 'xendit' | 'stripe';
 export interface Payment extends Row {
   orderId: ID; gateway: GatewayKey; mode: 'sandbox' | 'live'; method: string;

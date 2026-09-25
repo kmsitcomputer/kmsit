@@ -8,6 +8,7 @@ import { useApp } from '../../state/store';
 import { Icon } from '../../components/icons';
 import { Badge, CopyButton, Field, MediaPicker, PageHeader, Select, TextArea, TextInput, Toggle } from '../../components/ui';
 import { DashShell } from '../../components/Shell';
+import { MapsPicker } from '../../components/MapsPicker';
 import { PagedTable, RemoteView, useRemote } from '../../components/remote';
 
 /** Credentials live only in the server environment; this list only names them. */
@@ -40,12 +41,16 @@ export function SettingsGeneral() {
   /* Keys actually rendered in the General form — only these are safe to persist */
   const WritableKeys = [
     'site_name','site_url','slogan','logo','favicon','footer_text',
-    'email','phone','whatsapp','google_maps_api_key','address',
+    'email','phone','whatsapp','address',
     'map_lat','map_lng','map_query',
     'social_facebook','social_instagram','social_youtube','social_tiktok',
     'seo_title','seo_description',
     'allow_registration','maintenance_mode',
+    'google_maps_api_key','google_maps_map_id',
     'platform_fee_percent','currency','shipping_origin_subdistrict_id','shipping_couriers',
+    'local_delivery_enabled','local_delivery_store_name','local_delivery_store_latitude','local_delivery_store_longitude',
+    'local_delivery_minimum_distance_km','local_delivery_minimum_fee','local_delivery_rate_per_km',
+    'local_delivery_maximum_distance_km','local_delivery_profile',
   ] as const;
 
   if (!user) return null;
@@ -101,7 +106,6 @@ export function SettingsGeneral() {
               <Field label="Email"><TextInput value={f.email ?? ''} onChange={(e) => set('email', e.target.value)} /></Field>
               <Field label="Telepon"><TextInput value={f.phone ?? ''} onChange={(e) => set('phone', e.target.value)} /></Field>
               <Field label="WhatsApp" hint="cth: 6281234567890"><TextInput value={f.whatsapp ?? ''} onChange={(e) => set('whatsapp', e.target.value)} className="font-mono text-xs" /></Field>
-              <Field label="Google Maps API Key" hint="Opsional — tanpa key tetap pakai embed."><TextInput value={f.google_maps_api_key ?? ''} onChange={(e) => set('google_maps_api_key', e.target.value)} className="font-mono text-xs" /></Field>
               <div className="sm:col-span-2"><Field label="Alamat"><TextArea rows={2} value={f.address ?? ''} onChange={(e) => set('address', e.target.value)} /></Field></div>
               <Field label="Latitude"><TextInput value={f.map_lat ?? ''} onChange={(e) => set('map_lat', e.target.value)} className="font-mono text-xs" /></Field>
               <Field label="Longitude"><TextInput value={f.map_lng ?? ''} onChange={(e) => set('map_lng', e.target.value)} className="font-mono text-xs" /></Field>
@@ -137,6 +141,45 @@ export function SettingsGeneral() {
             <div className="grid gap-4">
               <Field label="Origin Toko (ID Kelurahan/Desa)" hint="ID sub-district dari API wilayah RajaOngkir — lokasi pengirim paket."><TextInput value={f.shipping_origin_subdistrict_id ?? ''} onChange={(e) => set('shipping_origin_subdistrict_id', e.target.value)} placeholder="cth: 1111" className="font-mono text-xs" /></Field>
               <Field label="Kurir Aktif" hint="Pisahkan dengan titik dua, cth: jne:jnt:sicepat. Hanya kurir ini yang tampil di checkout."><TextInput value={f.shipping_couriers ?? ''} onChange={(e) => set('shipping_couriers', e.target.value)} placeholder="jne:jnt:sicepat" className="font-mono text-xs" /></Field>
+            </div>
+          </Section>
+          <Section title="Google Maps" delay={150}>
+            <div className="grid gap-4">
+              <Field label="Google Maps JavaScript API Key" hint="Browser key untuk Google Maps JavaScript API. Batasi key dengan HTTP referrer dan API restrictions di Google Cloud. Jika key tidak tersedia, pemilihan koordinat manual tetap dapat digunakan."><TextInput value={f.google_maps_api_key ?? ''} onChange={(e) => set('google_maps_api_key', e.target.value)} className="font-mono text-xs" /></Field>
+              <Field label="Google Maps Map ID" hint="Gunakan Google Maps Map ID dari Google Cloud. Untuk development/testing aplikasi dapat menggunakan DEMO_MAP_ID."><TextInput value={f.google_maps_map_id ?? ''} onChange={(e) => set('google_maps_map_id', e.target.value)} placeholder="DEMO_MAP_ID" className="font-mono text-xs" /></Field>
+            </div>
+          </Section>
+          <Section title="Local Delivery (OpenRoute)" delay={160}>
+            <div className="grid gap-4">
+              <Toggle checked={f.local_delivery_enabled === '1'} onChange={(v) => set('local_delivery_enabled', v ? '1' : '0')} label="Aktifkan Local Delivery (antar langsung dari toko)" />
+              <Field label="Nama Lokasi Toko" hint="Label tampil di checkout, cth: Toko KMSIT Bandung."><TextInput value={f.local_delivery_store_name ?? ''} onChange={(e) => set('local_delivery_store_name', e.target.value)} placeholder="Toko KMSIT" /></Field>
+              <Field label="Posisi Toko di Peta" hint="Klik/tap peta untuk menaruh & menggeser marker — latitude/longitude terisi otomatis.">
+                <MapsPicker
+                  latitude={f.local_delivery_store_latitude != null && String(f.local_delivery_store_latitude).trim() !== '' && Number.isFinite(Number(f.local_delivery_store_latitude)) ? Number(f.local_delivery_store_latitude) : null}
+                  longitude={f.local_delivery_store_longitude != null && String(f.local_delivery_store_longitude).trim() !== '' && Number.isFinite(Number(f.local_delivery_store_longitude)) ? Number(f.local_delivery_store_longitude) : null}
+                  onChange={(lat, lng) => { set('local_delivery_store_latitude', lat == null ? '' : String(lat)); set('local_delivery_store_longitude', lng == null ? '' : String(lng)); }}
+                />
+              </Field>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Latitude Toko" required hint="cth: -6.9175"><TextInput value={f.local_delivery_store_latitude ?? ''} onChange={(e) => set('local_delivery_store_latitude', e.target.value)} placeholder="-6.9175" className="font-mono text-xs" /></Field>
+                <Field label="Longitude Toko" required hint="cth: 107.6191"><TextInput value={f.local_delivery_store_longitude ?? ''} onChange={(e) => set('local_delivery_store_longitude', e.target.value)} placeholder="107.6191" className="font-mono text-xs" /></Field>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Jarak Minimum (km)" hint="Sampai jarak ini berlaku tarif minimum."><TextInput type="number" min={0} step="0.1" value={f.local_delivery_minimum_distance_km ?? ''} onChange={(e) => set('local_delivery_minimum_distance_km', e.target.value)} placeholder="3" className="font-mono text-xs" /></Field>
+                <Field label="Tarif Minimum (Rp)" hint="Ongkir untuk jarak sampai minimum."><TextInput type="number" min={0} value={f.local_delivery_minimum_fee ?? ''} onChange={(e) => set('local_delivery_minimum_fee', e.target.value)} placeholder="10000" className="font-mono text-xs" /></Field>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Tarif per km (Rp)" hint="Dikenakan per km kelebihan (pembulatan sisa: <0.5 ke bawah, ≥0.5 ke atas)."><TextInput type="number" min={0} value={f.local_delivery_rate_per_km ?? ''} onChange={(e) => set('local_delivery_rate_per_km', e.target.value)} placeholder="2500" className="font-mono text-xs" /></Field>
+                <Field label="Jarak Maksimum (km)" hint="Di atas ini Local Delivery tidak tersedia (pakai jarak aktual)."><TextInput type="number" min={0} step="0.1" value={f.local_delivery_maximum_distance_km ?? ''} onChange={(e) => set('local_delivery_maximum_distance_km', e.target.value)} placeholder="30" className="font-mono text-xs" /></Field>
+              </div>
+              <Field label="Profil Rute" hint="Profil routing OpenRoute yang dipakai untuk Local Delivery.">
+                <Select value={f.local_delivery_profile ?? 'driving-car'} onChange={(e) => set('local_delivery_profile', e.target.value)}>
+                  <option value="driving-car">Driving Car</option>
+                  <option value="driving-hgv">Driving HGV</option>
+                  <option value="cycling-regular">Cycling Regular</option>
+                  <option value="foot-walking">Foot Walking</option>
+                </Select>
+              </Field>
             </div>
           </Section>
         </div>

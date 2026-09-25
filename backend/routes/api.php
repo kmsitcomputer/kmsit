@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\V1\MenuController;
 use App\Http\Controllers\Api\V1\CertificateController;
 use App\Http\Controllers\Api\V1\NotificationController;
 use App\Http\Controllers\Api\V1\SearchController;
+use App\Http\Controllers\Api\V1\LocalDeliveryController;
 use App\Http\Controllers\Api\V1\ShippingController;
 use App\Http\Controllers\Api\V1\AuditController;
 use App\Http\Controllers\Api\V1\ContactController;
@@ -98,6 +99,8 @@ Route::prefix('v1')->middleware([EncryptCookies::class, StartSession::class, Aut
     Route::get('/shipping/districts/{cityId}', [ShippingController::class, 'districts'])->middleware('throttle:60,1');
     Route::get('/shipping/subdistricts/{districtId}', [ShippingController::class, 'subdistricts'])->middleware('throttle:60,1');
     Route::post('/shipping/quote', [ShippingController::class, 'quote'])->middleware('throttle:30,1');
+    Route::get('/local-delivery/config', [LocalDeliveryController::class, 'config']);
+    Route::post('/local-delivery/quote', [LocalDeliveryController::class, 'quote'])->middleware('throttle:30,1');
     Route::post('/orders/{orderId}/cancel', [OrderController::class, 'cancel']);
     Route::get('/orders/{orderId}', [OrderController::class, 'show']);
     Route::get('/orders', [OrderController::class, 'index']);

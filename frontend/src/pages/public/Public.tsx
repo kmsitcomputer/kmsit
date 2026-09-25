@@ -866,6 +866,8 @@ export function ShopPage() {
       province_id: shipFull.province_id || undefined, city_id: shipFull.city_id || undefined,
       district_id: shipFull.district_id || undefined, subdistrict_id: shipFull.subdistrict_id || undefined,
       courier: shipFull.courier || undefined, service: shipFull.service || undefined,
+      delivery_method: shipFull.delivery_method,
+      local_latitude: shipFull.local_latitude ?? undefined, local_longitude: shipFull.local_longitude ?? undefined,
     } : undefined;
     api.createShopOrder({ voucher_code: appliedVoucher?.code ?? '', shipping }).then((response) => {
       const order = (response as { order: { id: string } }).order;
