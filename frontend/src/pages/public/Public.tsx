@@ -286,6 +286,120 @@ function ContentSectionBlock({ block }: { block: HomeBlock }) {
   );
 }
 
+function blockItems(setting: unknown): Array<Record<string, string>> {
+  if (Array.isArray(setting)) return setting.filter((item): item is Record<string, string> => typeof item === 'object' && item !== null);
+  if (typeof setting === 'string' && setting.trim() !== '') {
+    try {
+      const parsed: unknown = JSON.parse(setting);
+      if (Array.isArray(parsed)) return parsed.filter((item): item is Record<string, string> => typeof item === 'object' && item !== null);
+    } catch { return []; }
+  }
+  return [];
+}
+
+function BannerBlock({ block }: { block: HomeBlock }) {
+  const s = block.settings;
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      <Reveal>
+        <div className="surface-cta relative overflow-hidden rounded-2xl border border-base-800 px-6 py-12 sm:px-12" style={s.align ? { textAlign: s.align as 'left' | 'center' | 'right' } : undefined}>
+          <div className="absolute inset-0 grid-bg opacity-40" />
+          {s.image && <SafeImg src={s.image} alt={s.title || 'Banner'} className="absolute inset-0 h-full w-full object-cover opacity-20" />}
+          <div className="relative">
+            {s.title && <h2 className="font-display text-2xl sm:text-3xl font-bold">{s.title}</h2>}
+            {s.subtitle && <p className="mx-auto mt-2 max-w-md text-sm opacity-80">{s.subtitle}</p>}
+            {s.cta_label && s.cta_url && <Link to={s.cta_url} className="btn-primary mt-6 inline-flex">{s.cta_label} <Icon name="arrow-right" size={15} /></Link>}
+          </div>
+        </div>
+      </Reveal>
+    </section>
+  );
+}
+
+function SliderBlock({ block }: { block: HomeBlock }) {
+  const [index, setIndex] = useState(0);
+  const items = blockItems(block.settings.items);
+  if (items.length === 0) return null;
+  const current = items[index % items.length];
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      <Reveal>
+        <div className="relative overflow-hidden rounded-2xl border border-base-200 dark:border-base-800">
+          {current.image && <SafeImg src={current.image} alt={current.title || `Slide ${index + 1}`} className="aspect-video w-full object-cover" />}
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-base-950/80 to-transparent p-6">
+            {current.title && <h3 className="font-display text-xl font-bold text-white">{current.title}</h3>}
+            {current.subtitle && <p className="mt-1 text-sm text-white/80">{current.subtitle}</p>}
+            {current.cta_label && current.cta_url && <Link to={current.cta_url} className="btn-primary btn-sm mt-3 inline-flex">{current.cta_label}</Link>}
+          </div>
+          {items.length > 1 && (
+            <div className="absolute right-4 top-4 flex gap-2">
+              <button aria-label="Sebelumnya" className="btn-outline btn-sm" onClick={() => setIndex((index + items.length - 1) % items.length)}>‹</button>
+              <button aria-label="Berikutnya" className="btn-outline btn-sm" onClick={() => setIndex((index + 1) % items.length)}>›</button>
+            </div>
+          )}
+        </div>
+      </Reveal>
+    </section>
+  );
+}
+
+function FaqBlock({ block }: { block: HomeBlock }) {
+  const s = block.settings;
+  const [open, setOpen] = useState<number | null>(null);
+  const items = blockItems(s.items);
+  if (items.length === 0) return null;
+  return (
+    <section className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+      {s.title && <SectionHead title={s.title} sub={s.subtitle} />}
+      <div className="space-y-3">
+        {items.map((item, i) => (
+          <div key={i} className="card overflow-hidden">
+            <button className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left font-display text-[15px] font-bold" onClick={() => setOpen(open === i ? null : i)}>
+              {item.question}
+              <Icon name={open === i ? 'chevron-up' : 'chevron-down'} size={16} className="shrink-0 text-base-400" />
+            </button>
+            {open === i && item.answer && <div className="px-5 pb-5"><RichHTML html={item.answer} /></div>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function TestimonialBlock({ block }: { block: HomeBlock }) {
+  const s = block.settings;
+  const items = blockItems(s.items);
+  if (items.length === 0) return null;
+  return (
+    <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+      {s.title && <SectionHead title={s.title} sub={s.subtitle} />}
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((item, i) => (
+          <Reveal key={i} delay={i * 60}>
+            <div className="card h-full p-5">
+              <div className="flex items-center gap-3">
+                <Avatar name={item.name || '?'} src={item.photo} size={44} />
+                <div>
+                  <p className="font-display text-sm font-bold text-base-900 dark:text-base-50">{item.name}</p>
+                  {item.role && <p className="text-[11px] font-mono uppercase tracking-wide text-base-400">{item.role}</p>}
+                </div>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-base-600 dark:text-base-300">“{item.testimonial}”</p>
+              {Number(item.rating) >= 1 && (
+                <p className="mt-2 flex items-center gap-1 text-warn-500">
+                  {Array.from({ length: Math.min(5, Math.max(1, Math.round(Number(item.rating)))) }).map((_, r) => (
+                    <Icon key={r} name="star" size={13} />
+                  ))}
+                </p>
+              )}
+            </div>
+          </Reveal>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function BlockRenderer({ block }: { block: HomeBlock }) {
   const s = block.settings;
   switch (block.type) {
@@ -332,6 +446,10 @@ export function BlockRenderer({ block }: { block: HomeBlock }) {
       return s.html ? (
         <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6" dangerouslySetInnerHTML={{ __html: sanitizeLocal(s.html) }} />
       ) : null;
+    case 'banner': return <BannerBlock block={block} />;
+    case 'slider': return <SliderBlock block={block} />;
+    case 'faq': return <FaqBlock block={block} />;
+    case 'testimonial': return <TestimonialBlock block={block} />;
     default: return null;
   }
 }

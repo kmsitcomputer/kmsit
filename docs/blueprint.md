@@ -177,7 +177,7 @@ Tidak ada proxy dev terpisah untuk `/api` di `vite.config.js` — di produksi, b
 | news / tutorials | Bentuk identik ke `articles`, ditambah `video_url` | `status` · `published_at` |
 | activities | Kegiatan/event dengan tanggal & galeri | `event_date` · `event_time` · `location` · `registration_url` · `gallery:json` |
 | pages | Halaman statis bebas (About, custom page) | slug (unik) · `content` longtext |
-| homepage_blocks | Blok homepage yang bisa disusun ulang (drag & drop) | `type` · `content:json` · `enabled` · `sort` |
+| homepage_blocks | Blok homepage yang bisa disusun ulang (drag & drop) | `type` · `content:json` · `enabled` · `sort` — blok baru tanpa `enabled` eksplisit lahir sebagai draft privat; publikasi memerlukan `enabled=true` (kontrak aplikasi, bukan default database) |
 
 ### Struktur Situs & Media
 `menus` · `menu_items` · `settings` · `media`
@@ -293,7 +293,8 @@ Semua route berprefiks `/api/v1`. Autentikasi ditegakkan middleware kustom `Auth
 | GET | `/admin/content/{type}` | ContentController@adminIndex | |
 | POST/PUT/DELETE | `/{type}[/{id}]` | ContentController@store/update/destroy | kolom divalidasi per-type |
 | GET | `/articles[/{slug}]` | ArticleController@index/show | publik |
-| GET | `/homepage/blocks` | HomepageController@index | publik; admin CRUD di `/homepage/blocks` (auth) |
+| GET | `/homepage/blocks` | HomepageController@index | publik (hanya blok `enabled`) |
+| GET | `/admin/homepage/blocks` | HomepageController@admin | manajemen (auth + `manage_homepage`, termasuk draft) |
 | GET | `/menus?location=` | MenuController@index | publik |
 | GET | `/admin/menus` | MenuController@adminIndex | |
 | POST/PUT/DELETE | `/menus, /menus/items[/{id}]` | MenuController@storeMenu/storeItem/updateItem/destroyItem | |

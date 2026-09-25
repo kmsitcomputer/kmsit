@@ -19,14 +19,23 @@ const BLOCK_META: Record<BlockType, { label: string; icon: IconName }> = {
   activities: { label: 'Kegiatan', icon: 'calendar' }, cta: { label: 'Call to Action', icon: 'send' },
   text: { label: 'Teks / Konten', icon: 'type' }, video: { label: 'Video YouTube', icon: 'youtube' },
   map: { label: 'Google Maps', icon: 'map-pin' }, custom: { label: 'Custom HTML', icon: 'code' },
+  banner: { label: 'Banner', icon: 'image' }, slider: { label: 'Slider', icon: 'layers' },
+  faq: { label: 'FAQ', icon: 'info' }, testimonial: { label: 'Testimoni', icon: 'chat' },
 };
 
 function BlockEditor({ block, onClose }: { block: HomeBlock | null; onClose: () => void }) {
   const { toast } = useApp();
-  const [s, setS] = useState<Record<string, string>>({ ...(block?.settings ?? {}) });
+  const [s, setS] = useState<Record<string, string>>(() => {
+    const settings = { ...(block?.settings ?? {}) };
+    for (const key of ['items']) {
+      const value = settings[key];
+      if (Array.isArray(value)) settings[key] = JSON.stringify(value, null, 2);
+    }
+    return settings;
+  });
   const type = block?.type ?? 'text';
   const set = (k: string, v: string) => setS((p) => ({ ...p, [k]: v }));
-  const fields: Record<BlockType, Array<{ k: string; l: string; kind?: 'area' | 'rich' | 'text' }>> = {
+  const fields: Record<BlockType, Array<{ k: string; l: string; kind?: 'area' | 'rich' | 'text' | 'json' }>> = {
     hero: [{ k: 'heading', l: 'Heading (baris ke-2 jadi aksen)', kind: 'area' }, { k: 'sub', l: 'Subjudul', kind: 'area' }, { k: 'search_placeholder', l: 'Placeholder pencarian' }],
     stats: [], categories: [{ k: 'title', l: 'Judul' }],
     featured_courses: [{ k: 'title', l: 'Judul' }, { k: 'sub', l: 'Subjudul' }],
@@ -39,18 +48,37 @@ function BlockEditor({ block, onClose }: { block: HomeBlock | null; onClose: () 
     text: [{ k: 'html', l: 'Konten', kind: 'rich' }],
     video: [{ k: 'title', l: 'Judul' }, { k: 'url', l: 'URL YouTube' }],
     map: [{ k: 'title', l: 'Judul' }],
+    banner: [{ k: 'title', l: 'Judul' }, { k: 'subtitle', l: 'Subjudul', kind: 'area' }, { k: 'image', l: 'Gambar (path media / URL)' }, { k: 'cta_label', l: 'Label Tombol' }, { k: 'cta_url', l: 'URL Tombol' }],
+    slider: [{ k: 'items', l: 'Item slider (JSON: [{title, image, cta_label, cta_url}])', kind: 'json' }],
+    faq: [{ k: 'title', l: 'Judul' }, { k: 'items', l: 'Item FAQ (JSON: [{question, answer}])', kind: 'json' }],
+    testimonial: [{ k: 'title', l: 'Judul' }, { k: 'items', l: 'Testimoni (JSON: [{name, role, photo, testimonial, rating}])', kind: 'json' }],
     custom: [{ k: 'html', l: 'HTML (script/iframe dibuang otomatis)', kind: 'area' }],
+  };
+  const save = () => {
+    if (!block) return;
+    const payload: Record<string, unknown> = { ...s };
+    for (const f of fields[type]) {
+      if (f.kind !== 'json') continue;
+      const raw = (s[f.k] ?? '').trim();
+      if (raw === '') { payload[f.k] = []; continue; }
+      let parsed: unknown;
+      try { parsed = JSON.parse(raw); } catch { toast('error', `Kolom ${f.l} bukan JSON yang valid.`); return; }
+      if (!Array.isArray(parsed)) { toast('error', `Kolom ${f.l} harus berupa array JSON.`); return; }
+      payload[f.k] = parsed;
+    }
+    void api.updateHomepageBlock(block.id, { content: payload }).then(() => { toast('success', 'Blok diperbarui.'); onClose(); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal memperbarui blok.'));
   };
   return (
     <Modal open onClose={onClose} title={`Edit Blok — ${BLOCK_META[type].label}`} footer={
       <><button className="btn-ghost" onClick={onClose}>Batal</button>
-        <button className="btn-primary" onClick={() => { if (block) void api.updateHomepageBlock(block.id, { content: s }).then(() => { toast('success', 'Blok diperbarui.'); onClose(); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal memperbarui blok.')); }}><Icon name="check" size={14} /> Simpan</button></>
+        <button className="btn-primary" onClick={save}><Icon name="check" size={14} /> Simpan</button></>
     }>
       {fields[type].length === 0 ? <p className="text-sm text-base-400">Blok ini mengambil data langsung dari database — tidak ada pengaturan tambahan.</p> : (
         <div className="space-y-4">
           {fields[type].map((f) => (
             <Field key={f.k} label={f.l}>
               {f.kind === 'rich' ? <RichText value={s[f.k] ?? ''} onChange={(html) => set(f.k, html)} />
+                : f.kind === 'json' ? <TextArea rows={6} value={s[f.k] ?? ''} onChange={(e) => set(f.k, e.target.value)} className="font-mono text-xs" />
                 : f.kind === 'area' ? <TextArea rows={3} value={s[f.k] ?? ''} onChange={(e) => set(f.k, e.target.value)} />
                 : <TextInput value={s[f.k] ?? ''} onChange={(e) => set(f.k, e.target.value)} />}
             </Field>

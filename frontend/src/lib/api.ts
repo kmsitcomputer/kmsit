@@ -478,7 +478,7 @@ export const api = {
   async homepageBlocks(): Promise<any[]> {
     return (await request<{ blocks: any[] }>('/homepage/blocks')).blocks;
   },
-  async adminHomepageBlocks(): Promise<any[]> { return (await request<{ blocks: any[] }>('/homepage/blocks')).blocks; },
+  async adminHomepageBlocks(): Promise<any[]> { return (await request<{ blocks: any[] }>('/admin/homepage/blocks')).blocks; },
   async updateHomepageBlock(id: string, payload: Record<string, unknown>): Promise<void> { await request(`/homepage/blocks/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) }); },
   async createHomepageBlock(payload: Record<string, unknown>): Promise<void> { await request('/homepage/blocks', { method: 'POST', body: JSON.stringify(payload) }); },
   async deleteHomepageBlock(id: string): Promise<void> { await request(`/homepage/blocks/${encodeURIComponent(id)}`, { method: 'DELETE' }); },

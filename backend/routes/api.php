@@ -162,7 +162,7 @@ Route::prefix('v1')->middleware([EncryptCookies::class, StartSession::class, Aut
     Route::delete('/categories/{id}', [CategoryController::class, 'destroy']);
     Route::get('/admin/content/articles', [ContentController::class, 'adminIndex'])->defaults('type', 'articles');
     Route::post('/homepage/blocks', [HomepageController::class, 'store']);
-    Route::get('/homepage/blocks', [HomepageController::class, 'admin']);
+    Route::get('/admin/homepage/blocks', [HomepageController::class, 'admin']);
     Route::put('/homepage/blocks/{id}', [HomepageController::class, 'update']);
     Route::delete('/homepage/blocks/{id}', [HomepageController::class, 'destroy']);
     Route::get('/admin/menus', [MenuController::class, 'adminIndex']);

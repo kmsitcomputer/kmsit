@@ -119,6 +119,14 @@ try {
     assert.ok(!/adminUsers|api\.orders\(/.test(page));
     assert.ok(/instructorStudents|instructorSales|instructorEarnings|instructorQuizzes|instructorQuizAttempts|instructorCourseProgress/.test(page));
   });
+  check('homepage block editor converts items JSON to arrays before save', () => {
+    const editor = readFileSync(join(src, 'pages/dash/Cms.tsx'), 'utf8');
+    assert.ok(editor.includes("kind: 'json'"), 'items fields must use the json kind');
+    assert.ok(/JSON\.parse\(raw\)/.test(editor), 'save must JSON.parse items strings');
+    assert.ok(/!Array\.isArray\(parsed\)/.test(editor), 'save must reject non-array JSON');
+    const apiSource = readFileSync(join(src, 'lib/api.ts'), 'utf8');
+    assert.ok(apiSource.includes("'/admin/homepage/blocks'"), 'management listing must use the distinct admin endpoint');
+  });
 
   console.log(`\nverify-dashboard: ${passed} checks passed`);
 } finally {

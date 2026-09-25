@@ -102,7 +102,8 @@ export interface Page extends Row {
 }
 
 export type BlockType = 'hero' | 'stats' | 'featured_courses' | 'latest_courses' | 'free_courses' | 'categories'
-  | 'instructors' | 'articles' | 'news' | 'tutorials' | 'activities' | 'cta' | 'text' | 'video' | 'map' | 'custom';
+  | 'instructors' | 'articles' | 'news' | 'tutorials' | 'activities' | 'cta' | 'text' | 'video' | 'map' | 'custom'
+  | 'banner' | 'slider' | 'faq' | 'testimonial';
 export interface HomeBlock extends Row { type: BlockType; enabled: boolean; order: number; settings: Record<string, string>; }
 
 export interface Menu extends Row { name: string; location: 'header' | 'footer' | 'both'; }
