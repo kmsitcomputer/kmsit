@@ -287,8 +287,6 @@ export function SettingsIntegrations() {
   const set = (key: string, value: string) => setValues((current) => ({ ...current, [key]: value }));
   const save = () => {
     void api.updateSettings({
-      zoom_account_id: values.zoom_account_id ?? '',
-      zoom_client_id: values.zoom_client_id ?? '',
       gmeet_default_url: values.gmeet_default_url ?? '',
       youtube_channel_url: values.youtube_channel_url ?? '',
     }).then(() => { toast('success', 'Integrasi berhasil disimpan.'); }).catch((error) => toast('error', error instanceof Error ? error.message : 'Gagal menyimpan integrasi.'));
@@ -305,11 +303,7 @@ export function SettingsIntegrations() {
         </Section>
         <Section title="Zoom Meeting" id="zoom" delay={60}>
           <Badge tone="warn">{t('not_active')}</Badge>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <Field label="Account ID"><TextInput value={values.zoom_account_id ?? ''} onChange={(e) => set('zoom_account_id', e.target.value)} placeholder="Zoom Account ID" /></Field>
-            <Field label="Client ID"><TextInput value={values.zoom_client_id ?? ''} onChange={(e) => set('zoom_client_id', e.target.value)} placeholder="Zoom OAuth Client ID" /></Field>
-          </div>
-          <p className="mt-3 text-[11px] text-base-400">Client Secret dan Webhook Secret tetap di `.env` server.</p>
+          <p className="mt-2 text-sm text-base-500">Kredensial Zoom (Account ID, Client ID, Client Secret) hanya dari environment server — tidak dikonfigurasi lewat dashboard.</p>
         </Section>
         <Section title="Google Meet" id="gmeet" delay={120}>
           <Badge tone="warn">{t('not_active')}</Badge>

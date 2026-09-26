@@ -406,6 +406,24 @@ export const api = {
   async localDeliveryQuote(payload: { latitude: number; longitude: number }): Promise<import('./types').LocalDeliveryQuote> {
     return request('/local-delivery/quote', { method: 'POST', body: JSON.stringify(payload) });
   },
+  async courseLiveClasses(courseId: string): Promise<import('./types').LiveClass[]> {
+    return (await request<{ live_classes: import('./types').LiveClass[] }>(`/courses/${encodeURIComponent(courseId)}/live-classes`)).live_classes;
+  },
+  async joinLiveClass(id: string): Promise<import('./types').LiveClass> {
+    return (await request<{ live_class: import('./types').LiveClass }>(`/live-classes/${encodeURIComponent(id)}/join`, { method: 'POST' })).live_class;
+  },
+  async manageLiveClasses(courseId: string): Promise<import('./types').LiveClass[]> {
+    return (await request<{ live_classes: import('./types').LiveClass[] }>(`/admin/courses/${encodeURIComponent(courseId)}/live-classes`)).live_classes;
+  },
+  async createLiveClass(courseId: string, payload: Record<string, unknown>): Promise<import('./types').LiveClass> {
+    return (await request<{ live_class: import('./types').LiveClass }>(`/admin/courses/${encodeURIComponent(courseId)}/live-classes`, { method: 'POST', body: JSON.stringify(payload) })).live_class;
+  },
+  async updateLiveClass(id: string, payload: Record<string, unknown>): Promise<import('./types').LiveClass> {
+    return (await request<{ live_class: import('./types').LiveClass }>(`/admin/live-classes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) })).live_class;
+  },
+  async cancelLiveClass(id: string): Promise<import('./types').LiveClass> {
+    return (await request<{ live_class: import('./types').LiveClass }>(`/admin/live-classes/${encodeURIComponent(id)}`, { method: 'DELETE' })).live_class;
+  },
   /** The provider is chosen server-side; only the method key is sent. */
   async initiatePayment(orderId: string, method: string): Promise<{ payment: { reference: string }; checkout_url?: string | null }> {
     return request(`/orders/${encodeURIComponent(orderId)}/payment`, { method: 'POST', body: JSON.stringify({ method }) });

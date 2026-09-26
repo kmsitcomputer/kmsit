@@ -43,7 +43,8 @@ class SettingsController extends Controller
         'local_delivery_enabled', 'local_delivery_store_name', 'local_delivery_store_latitude',
         'local_delivery_store_longitude', 'local_delivery_minimum_distance_km', 'local_delivery_minimum_fee',
         'local_delivery_rate_per_km', 'local_delivery_maximum_distance_km', 'local_delivery_profile',
-        'zoom_enabled', 'zoom_account_id', 'zoom_client_id', 'gmeet_enabled', 'gmeet_default_url',
+        'live_class_enabled', 'live_class_default_provider',
+        'zoom_enabled', 'gmeet_enabled', 'gmeet_default_url',
         'youtube_enabled', 'youtube_channel_url',
     ];
 

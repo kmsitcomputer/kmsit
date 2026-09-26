@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { Course, Lesson, Quiz, ID, Order, Question } from '../../lib/types';
+import type { Course, Lesson, LiveClass, Quiz, ID, Order, Question } from '../../lib/types';
 import { api, type ApiCertificate, type ApiCourseDetail, type LearningStatus } from '../../lib/api';
 import { coursePrice, fmtMoney, youtubeId } from '../../lib/format';
 import { useApp } from '../../state/store';
@@ -525,6 +525,7 @@ export function LearnPage() {
   const [remoteDetail, setRemoteDetail] = useState<import('../../lib/api').ApiCourseDetail | null>(null);
   const [completedLessonIds, setCompletedLessonIds] = useState<string[]>([]);
   const [remoteQuizzes, setRemoteQuizzes] = useState<Quiz[]>([]);
+  const [remoteLives, setRemoteLives] = useState<LiveClass[]>([]);
   const [status, setStatus] = useState<LearningStatus | null>(null);
   const [currentLessonId, setCurrentLessonId] = useState<ID | null>(null);
   const [quizOpen, setQuizOpen] = useState<Quiz | null>(null);
@@ -534,6 +535,7 @@ export function LearnPage() {
   useEffect(() => { if (slug) void api.course(slug).then(setRemoteDetail).catch(() => setRemoteDetail(null)); }, [slug]);
   useEffect(() => { if (slug && user) void api.courseProgress(slug).then((progress) => setCompletedLessonIds(progress.completedLessonIds)).catch(() => setCompletedLessonIds([])); }, [slug, user]);
   useEffect(() => { if (course?.id && user && remoteDetail?.enrolled) void api.quizzes(course.id).then(setRemoteQuizzes).catch(() => setRemoteQuizzes([])); }, [course?.id, user, remoteDetail?.enrolled]);
+  useEffect(() => { if (course?.id && user && remoteDetail?.enrolled) void api.courseLiveClasses(course.id).then(setRemoteLives).catch(() => setRemoteLives([])); }, [course?.id, user, remoteDetail?.enrolled]);
   const reloadStatus = () => { if (course?.id && user && remoteDetail?.enrolled) void api.learningStatus(course.id).then(setStatus).catch(() => setStatus(null)); };
   useEffect(reloadStatus, [course?.id, user?.id, remoteDetail?.enrolled]);
 
@@ -630,6 +632,21 @@ export function LearnPage() {
                   </button>
                 );
               })}
+            </div>
+          )}
+          {remoteLives.length > 0 && (
+            <div className="border-t border-base-200 dark:border-base-800 p-3">
+              <p className="px-3 pb-2 font-mono text-[10px] font-bold uppercase tracking-wider text-base-400">Live Class</p>
+              {remoteLives.map((live) => (
+                <button key={live.id} onClick={() => { if (live.joinUrl) window.open(live.joinUrl, '_blank', 'noopener,noreferrer'); }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-bold transition-colors cursor-pointer bg-brand-500/10 text-brand-700 dark:text-brand-300 hover:bg-brand-500/20">
+                  <Icon name="play" size={16} />
+                  <span className="flex-1">{live.title}</span>
+                  <Badge tone={live.displayState === 'cancelled' ? 'neutral' : live.displayState === 'in_session_window' ? 'ok' : 'brand'}>
+                    {live.displayState === 'in_session_window' ? 'Berlangsung' : live.displayState === 'upcoming' ? 'Akan datang' : live.displayState === 'ended' ? 'Selesai' : 'Batal'}
+                  </Badge>
+                </button>
+              ))}
             </div>
           )}
         </aside>

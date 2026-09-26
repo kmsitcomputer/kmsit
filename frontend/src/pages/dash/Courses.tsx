@@ -8,6 +8,7 @@ import { Icon } from '../../components/icons';
 import RichText from '../../components/RichText';
 import { Badge, Confirm, Field, IconButton, MediaPicker, Modal, PageHeader, Select, Spinner, StatusBadge, Tabs, TextArea, TextInput, Toggle } from '../../components/ui';
 import { DashShell } from '../../components/Shell';
+import { LiveClassManager } from '../../components/LiveClass';
 import { PagedTable, RemoteView, useRemote } from '../../components/remote';
 
 /* ================= local (unsaved) curriculum model ================= */
@@ -315,6 +316,11 @@ export function CourseEditor({ courseId, onClose }: { courseId: string | 'new' |
                   {sec.lessons.length === 0 && <p className="px-4 py-2 pl-10 text-xs text-base-400">Belum ada materi.</p>}
                 </div>
               ))}
+            </div>
+          )}
+          {existing && existing.id && (
+            <div className="rounded-xl border border-base-200 dark:border-base-800 p-4">
+              <LiveClassManager courseId={existing.id} />
             </div>
           )}
         </div>

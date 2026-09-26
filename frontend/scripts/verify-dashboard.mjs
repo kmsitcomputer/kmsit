@@ -173,6 +173,16 @@ try {
     const shop = readFileSync(join(src, 'pages/public/Public.tsx'), 'utf8');
     assert.ok(/MapsPicker|local_latitude/.test(shop) || /ShippingForm/.test(shop), 'checkout must wire the picker through the shipping form');
   });
+  check('live class uses authorized endpoints and never leaks host secrets', () => {
+    const apiSource = readFileSync(join(src, 'lib/api.ts'), 'utf8');
+    assert.ok(apiSource.includes("'/courses/${encodeURIComponent(courseId)}/live-classes'") || apiSource.includes('/live-classes'), 'student join must go through the backend');
+    assert.ok(!/start_url/.test(apiSource), 'frontend must never handle host start URLs');
+    const manager = readFileSync(join(src, 'components/LiveClass.tsx'), 'utf8');
+    assert.ok(/manageLiveClasses|courseLiveClasses|createLiveClass/.test(manager), 'manager must use the authorized endpoints');
+    assert.ok(!/start_url|client_secret|account_id/i.test(manager), 'manager must never touch credentials or host secrets');
+    const learn = readFileSync(join(src, 'pages/public/Courses.tsx'), 'utf8');
+    assert.ok(/courseLiveClasses/.test(learn), 'student UI must load sessions for enrolled courses');
+  });
 
   console.log(`\nverify-dashboard: ${passed} checks passed`);
 } finally {

@@ -153,6 +153,15 @@ export interface LocalDeliveryQuote {
   store?: { name?: string | null; latitude: number; longitude: number };
 }
 
+export type LiveClassProvider = 'zoom' | 'google_meet';
+export type LiveClassStatus = 'scheduled' | 'cancelled';
+export type LiveClassDisplayState = 'upcoming' | 'in_session_window' | 'ended' | 'cancelled';
+export interface LiveClass extends Row {
+  courseId: ID; provider: LiveClassProvider; providerMeetingId?: string | null;
+  title: string; scheduledAt: string | null; durationMinutes: number; timezone?: string | null;
+  joinUrl?: string | null; status: LiveClassStatus; displayState: LiveClassDisplayState;
+}
+
 export type GatewayKey = 'tripay' | 'xendit' | 'stripe';
 export interface Payment extends Row {
   orderId: ID; gateway: GatewayKey; mode: 'sandbox' | 'live'; method: string;

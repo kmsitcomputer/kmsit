@@ -4,10 +4,14 @@ namespace App\Providers;
 
 use App\Contracts\RouteProvider;
 use App\Contracts\ShippingProvider;
+use App\Contracts\LiveClassProvider;
 use App\Models\User;
 use App\Policies\UserPolicy;
+use App\Services\GoogleMeetProvider;
 use App\Services\LocalDeliveryService;
+use App\Services\LiveClassManager;
 use App\Services\OpenRouteProvider;
+use App\Services\ZoomProvider;
 use App\Services\RajaOngkirProvider;
 use App\Services\RouteManager;
 use App\Services\ShippingService;
@@ -26,6 +30,8 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(RouteProvider::class, fn () => OpenRouteProvider::fromConfig());
         $this->app->bind(RouteManager::class, fn ($app) => new RouteManager($app->make(RouteProvider::class)));
         $this->app->bind(LocalDeliveryService::class, fn ($app) => new LocalDeliveryService($app->make(RouteManager::class)));
+        $this->app->bind(LiveClassProvider::class, fn () => new GoogleMeetProvider());
+        $this->app->bind(LiveClassManager::class, fn () => new LiveClassManager());
     }
 
     /**
