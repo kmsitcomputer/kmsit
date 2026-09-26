@@ -503,10 +503,10 @@ Ditemukan langsung dari audit kode — bukan asumsi. Diurutkan berdasarkan dampa
 1. **[Terverifikasi] Guard Sanctum aktif lewat paket** — `SanctumServiceProvider::register()` mendaftarkan `auth.guards.sanctum` otomatis, sehingga token bearer berfungsi (dipakai test `createToken`/`withToken`). `config/auth.php` hanya mendefinisikan guard `web` — konsisten, karena `sanctum` adalah guard paket. Keputusan tersisa: apakah bearer akan diekspos untuk integrasi eksternal atau hanya fallback internal.
 2. **[Selesai] Modul localStorage legacy dihapus** — `lib/db.ts`, `lib/lms.ts`, `lib/commerce.ts`, dan `lib/services.ts` sudah dihapus; frontend kini server-driven (`lib/settings.ts` in-memory, preferensi tema/bahasa di cookie).
 3. **Mail & job berjalan sinkron secara default** — `QUEUE_CONNECTION=sync` membuat `PasswordResetMail` (meski `ShouldQueue`) terkirim inline dalam request — request lambat menunggu SMTP, dan gagal total jika proses PHP mati di tengah kirim.
-4. **Bundle JS tunggal ±1 MB tanpa code-splitting** — Seluruh kode dashboard admin ikut terkirim ke pengunjung publik yang hanya membuka homepage — belum ada `dynamic import()` per-route.
-5. **Test frontend masih statis** — Backend punya 214 test PHPUnit; frontend punya `scripts/verify-dashboard.mjs` (14 static check: menu/route/i18n/pagination) tetapi belum ada test runner unit (Vitest) untuk logika kalkulasi/checkout.
+4. **Bundle JS multiple chunk** — Build produksi saat ini mengeluarkan beberapa chunk JavaScript, termasuk chunk terpisah untuk Public, dashboard pages, RichText, remote, index, dan komponen/route lain; code-splitting route/component hadir. Chunk terbesar yang dilaporkan pada build yang diamati sekitar 414 kB. Penjelasan ini hanya menggambarkan kondisi build yang diamati, bukan klaim optimasi performa, bukan klaim peningkatan kecepatan, dan bukan jaminan ukuran bundle untuk build ke depan.
+5. **Test frontend berlapis** — `scripts/verify-dashboard.mjs` menyediakan 18 static check untuk kontrak dashboard/integrasi, sementara Vitest menguji helper format, settings, permission UI, dan API wrapper. Harga produk, voucher, subtotal final, ongkir, dan total order tetap dihitung ulang oleh backend; test frontend hanya memverifikasi normalisasi dan metadata tampilan.
 6. **RBAC makin terpusat tapi belum sepenuhnya** — sudah ada `AdminAccess`/`InstructorAccess` + `UserPolicy`, namun sebagian controller masih memeriksa `role_key` manual; lanjutkan migrasi ke Policy/Gate sebagai satu sumber kebenaran.
-7. **Dependency tak terpakai** — `lucide-react` (ikon dibuat manual di `icons.tsx`) dan `@supabase/supabase-js` tercantum di `package.json` tapi tidak dirujuk kode manapun.
+7. **Dependency perlu ditinjau berkala** — `lucide-react` masih tercantum di `package.json` sementara ikon aplikasi dibuat melalui `icons.tsx`. Klaim lama tentang `@supabase/supabase-js` tidak lagi berlaku karena paket tersebut tidak tercantum di manifest saat ini.
 
 ---
 
@@ -525,8 +525,8 @@ Ditemukan langsung dari audit kode — bukan asumsi. Diurutkan berdasarkan dampa
 
 **P2 — kualitas & skala**
 
-- Tambah test otomatis frontend (Vitest) untuk kalkulasi keranjang/voucher, scoring kuis UI, alur checkout.
-- Bersihkan dependency tak terpakai (`lucide-react`, `@supabase/supabase-js`).
+- Pertahankan test Vitest untuk helper dan API boundary; jangan menduplikasi perhitungan harga/voucher/order yang authoritative di backend.
+- Tinjau penggunaan `lucide-react` sebelum memutuskan penghapusan dependency.
 
 ---
 
