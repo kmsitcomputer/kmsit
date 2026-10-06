@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 class InstallController extends Controller
 {
     /** Lock file path used across requests to guard against installer re-execution. */
-    private const LOCK_PATH = '/../../storage/installed.lock';
+    private const LOCK_PATH = '/../storage/installed.lock';
 
     /**
      * Return true when the application has been installed (lock file or DB).
